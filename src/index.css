@@ -65,12 +65,12 @@ All colors MUST be HSL.
     --gradient-subtle: linear-gradient(180deg, hsl(216 32% 99%), hsl(216 32% 97%));
     --gradient-card: linear-gradient(135deg, hsl(0 0% 100%), hsl(216 18% 99%));
 
-    /* Enhanced shadows */
-    --shadow-soft: 0 2px 8px -2px hsl(222 13% 16% / 0.06);
-    --shadow-medium: 0 4px 16px -4px hsl(222 13% 16% / 0.1);
-    --shadow-strong: 0 8px 32px -8px hsl(222 13% 16% / 0.14);
+    /* Enhanced shadows (slightly darker for better contrast) */
+    --shadow-soft: 0 2px 8px -2px hsl(222 13% 16% / 0.08);
+    --shadow-medium: 0 6px 20px -6px hsl(222 13% 16% / 0.14);
+    --shadow-strong: 0 10px 36px -8px hsl(222 13% 16% / 0.18);
     --shadow-glow: 0 0 24px hsl(214 100% 59% / 0.15);
-    --shadow-card: 0 1px 3px hsl(222 13% 16% / 0.04), 0 4px 12px hsl(222 13% 16% / 0.06);
+    --shadow-card: 0 2px 6px hsl(222 13% 16% / 0.08), 0 8px 20px hsl(222 13% 16% / 0.10);
 
     --radius: 0.5rem;
 
@@ -137,5 +137,21 @@ All colors MUST be HSL.
 
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@layer utilities {
+  /* Custom utilities used across cards */
+  .shadow-card {
+    box-shadow: var(--shadow-card);
+  }
+  .shadow-medium {
+    box-shadow: var(--shadow-medium);
+  }
+  .shadow-strong {
+    box-shadow: var(--shadow-strong);
+  }
+  .bg-gradient-card {
+    background: var(--gradient-card);
   }
 }
