@@ -47,26 +47,30 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
-        // Financial app colors
+        // Modern financial colors
         income: {
           DEFAULT: "hsl(var(--income))",
           foreground: "hsl(var(--income-foreground))",
           light: "hsl(var(--income-light))",
+          subtle: "hsl(var(--income-subtle))",
         },
         expense: {
           DEFAULT: "hsl(var(--expense))",
           foreground: "hsl(var(--expense-foreground))",
           light: "hsl(var(--expense-light))",
+          subtle: "hsl(var(--expense-subtle))",
         },
         balance: {
           DEFAULT: "hsl(var(--balance))",
           foreground: "hsl(var(--balance-foreground))",
           light: "hsl(var(--balance-light))",
+          subtle: "hsl(var(--balance-subtle))",
         },
         goal: {
           DEFAULT: "hsl(var(--goal))",
           foreground: "hsl(var(--goal-foreground))",
           light: "hsl(var(--goal-light))",
+          subtle: "hsl(var(--goal-subtle))",
         },
         sidebar: {
           DEFAULT: "hsl(var(--sidebar-background))",
@@ -90,12 +94,14 @@ export default {
         'gradient-expense': 'var(--gradient-expense)',
         'gradient-goal': 'var(--gradient-goal)',
         'gradient-subtle': 'var(--gradient-subtle)',
+        'gradient-card': 'var(--gradient-card)',
       },
       boxShadow: {
         'soft': 'var(--shadow-soft)',
         'medium': 'var(--shadow-medium)',
         'strong': 'var(--shadow-strong)',
         'glow': 'var(--shadow-glow)',
+        'card': 'var(--shadow-card)',
       },
       keyframes: {
         "accordion-down": {
