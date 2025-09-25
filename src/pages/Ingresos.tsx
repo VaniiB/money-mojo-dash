@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { Plus, TrendingUp, Calendar, User, MapPin } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Plus, TrendingUp, Calendar, MapPin } from "lucide-react";
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,44 +20,8 @@ interface Income {
   location: string;
 }
 
-const mockIncomes: Income[] = [
-  {
-    id: "1",
-    date: "2024-01-15",
-    type: "rappi",
-    shift: "noche",
-    person: "vanina",
-    amount: 4200,
-    tips: 800,
-    paymentMethod: "efectivo",
-    location: "Centro"
-  },
-  {
-    id: "2", 
-    date: "2024-01-15",
-    type: "envios",
-    shift: "dia", 
-    person: "leonardo",
-    amount: 3500,
-    tips: 0,
-    paymentMethod: "transferencia",
-    location: "Zona Norte"
-  },
-  {
-    id: "3",
-    date: "2024-01-14",
-    type: "rappi",
-    shift: "dia",
-    person: "vanina", 
-    amount: 3800,
-    tips: 600,
-    paymentMethod: "efectivo",
-    location: "Centro"
-  }
-];
-
 export default function Ingresos() {
-  const [incomes, setIncomes] = useState<Income[]>(mockIncomes);
+  const [incomes, setIncomes] = useState<Income[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0],
@@ -68,6 +33,23 @@ export default function Ingresos() {
     paymentMethod: "",
     location: ""
   });
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("mm_incomes");
+      if (stored) {
+        const parsed = JSON.parse(stored) as Income[];
+        if (Array.isArray(parsed)) setIncomes(parsed);
+      }
+    } catch (err) {
+      console.warn("No se pudo leer mm_incomes", err);
+    }
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem("mm_incomes", JSON.stringify(incomes)); } catch (err) {
+      console.warn("No se pudo guardar mm_incomes", err);
+    }
+  }, [incomes]);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat("es-AR", {
@@ -123,7 +105,8 @@ export default function Ingresos() {
         </div>
         <Button 
           onClick={() => setShowForm(!showForm)}
-          className="bg-gradient-income border-0 mt-4 sm:mt-0"
+          variant="outline"
+          className="mt-4 sm:mt-0 bg-blue-600 hover:bg-blue-600/90 text-white border-0"
         >
           <Plus className="h-4 w-4 mr-2" />
           Nuevo Ingreso
@@ -137,9 +120,9 @@ export default function Ingresos() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Hoy</p>
-                <p className="text-2xl font-bold text-income">{formatCurrency(totalToday)}</p>
+                <p className="text-2xl font-bold text-primary">{formatCurrency(totalToday)}</p>
               </div>
-              <TrendingUp className="h-8 w-8 text-income" />
+              <TrendingUp className="h-8 w-8 text-primary" />
             </div>
           </CardContent>
         </Card>
@@ -149,9 +132,9 @@ export default function Ingresos() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Esta Semana</p>
-                <p className="text-2xl font-bold text-income">{formatCurrency(totalWeek)}</p>
+                <p className="text-2xl font-bold text-balance">{formatCurrency(totalWeek)}</p>
               </div>
-              <Calendar className="h-8 w-8 text-income" />
+              <Calendar className="h-8 w-8 text-balance" />
             </div>
           </CardContent>
         </Card>
@@ -161,9 +144,9 @@ export default function Ingresos() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Promedio Diario</p>
-                <p className="text-2xl font-bold text-income">{formatCurrency(totalWeek / 7)}</p>
+                <p className="text-2xl font-bold text-goal">{formatCurrency(totalWeek / 7)}</p>
               </div>
-              <TrendingUp className="h-8 w-8 text-income" />
+              <TrendingUp className="h-8 w-8 text-goal" />
             </div>
           </CardContent>
         </Card>
@@ -275,7 +258,7 @@ export default function Ingresos() {
               </div>
 
               <div className="md:col-span-2 flex gap-2">
-                <Button type="submit" className="bg-gradient-income border-0">
+                <Button type="submit" className="bg-blue-600 hover:bg-blue-600/90 text-white border-0">
                   Guardar Ingreso
                 </Button>
                 <Button type="button" variant="outline" onClick={() => setShowForm(false)}>
@@ -293,12 +276,15 @@ export default function Ingresos() {
           <CardTitle>Historial de Ingresos</CardTitle>
         </CardHeader>
         <CardContent>
+          {incomes.length === 0 ? (
+            <div className="text-sm text-muted-foreground">No hay registro</div>
+          ) : (
           <div className="space-y-4">
             {incomes.map((income) => (
               <div key={income.id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors">
                 <div className="flex items-center space-x-4">
-                  <div className="p-2 bg-income-light rounded-full">
-                    <TrendingUp className="h-4 w-4 text-income" />
+                  <div className="p-2 bg-primary/10 rounded-full">
+                    <TrendingUp className="h-4 w-4 text-primary" />
                   </div>
                   <div>
                     <div className="flex items-center space-x-2 mb-1">
@@ -323,7 +309,7 @@ export default function Ingresos() {
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-lg font-bold text-income">
+                  <p className="text-lg font-bold text-primary">
                     {formatCurrency(income.amount + income.tips)}
                   </p>
                   {income.tips > 0 && (
@@ -335,6 +321,7 @@ export default function Ingresos() {
               </div>
             ))}
           </div>
+          )}
         </CardContent>
       </Card>
     </div>

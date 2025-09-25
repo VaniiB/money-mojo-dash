@@ -56,10 +56,11 @@ const initialFinancialData = {
   },
   monthlyFixedExpenses: 135000 + 50000 + 50000 + 10000 + 100000 + 24000 + 60000 + 20000 + 150000 + 20000, // 619000
   motoGoal: {
-    target: 2050000,
+    target: 2500000,
     current: 120000,
     deadline: "2024-10-20"
-  }
+  },
+  documentsGoal: 300000 // Papeles/documentación
 };
 
 const ENVIO_RATES = {
@@ -97,6 +98,9 @@ export default function Dashboard() {
       minimumFractionDigits: 0,
     }).format(amount);
   };
+
+  // Mostrar opciones de una reserva al hacer click en el nombre (por chip)
+  const [openResId, setOpenResId] = useState<string | null>(null);
 
   // Persistencia en localStorage: cargar al montar
   useEffect(() => {
@@ -177,6 +181,10 @@ export default function Dashboard() {
     let enviosTotal = 0;
     let tipsTotal = 0;
 
+    // límites de la semana actual
+    const start = new Date(currentWeekStart);
+    const end = new Date(currentWeekStart); end.setDate(end.getDate() + 6);
+
     for (let i = 0; i < 7; i++) {
       const dayData = getDayData(i);
       dayData.reservations.forEach(res => {
@@ -187,7 +195,41 @@ export default function Dashboard() {
       tipsTotal += (dayData.tip_day || 0) + (dayData.tip_night || 0);
     }
 
-    return { cobradas, aCobrar, enviosTotal, tipsTotal, total: cobradas + enviosTotal + tipsTotal };
+    // Gastos variables de la semana
+    let varExpenses = 0;
+    try {
+      const raw = localStorage.getItem("mm_variable_expenses");
+      if (raw) {
+        const arr = JSON.parse(raw) as Array<{ date: string; amount: number }>;
+        varExpenses = arr.filter(e => {
+          const d = new Date(e.date);
+          return d >= start && d <= end;
+        }).reduce((s, e) => s + (e.amount || 0), 0);
+      }
+    } catch (e) { console.warn("No se pudo leer mm_variable_expenses", e); }
+
+    // Gastos fijos (solo pagados) de la semana
+    let fixedExpenses = 0;
+    try {
+      const raw = localStorage.getItem("mm_fixed_expenses");
+      if (raw) {
+        const arr = JSON.parse(raw) as Array<{ date: string; amount: number; paid: boolean }>;
+        fixedExpenses = arr.filter(e => e.paid).filter(e => {
+          const d = new Date(e.date);
+          return d >= start && d <= end;
+        }).reduce((s, e) => s + (e.amount || 0), 0);
+      }
+    } catch (e) { console.warn("No se pudo leer mm_fixed_expenses", e); }
+
+    const incomeTotal = cobradas + enviosTotal + tipsTotal;
+    const expensesTotal = varExpenses + fixedExpenses;
+    const net = incomeTotal - expensesTotal;
+
+    // Total reservas = cobradas + aCobrar (contamos todas las reservas, no solo cobradas)
+    const reservasTotal = cobradas + aCobrar;
+    const totalConReservas = reservasTotal + enviosTotal + tipsTotal;
+
+    return { cobradas, aCobrar, enviosTotal, tipsTotal, total: totalConReservas, expensesTotal, net: totalConReservas - expensesTotal };
   };
 
   const calculatePackagesNeeded = () => {
@@ -362,6 +404,40 @@ export default function Dashboard() {
   const prevWeekTotals = getWeekTotals(prevWeekStart);
   const diffPct = (curr: number, prev: number) => prev === 0 ? 100 : Math.round(((curr - prev) / prev) * 100);
 
+  // =============================
+  // Plan Diario Flex (Día/Noche)
+  // =============================
+  const [dailyTargets, setDailyTargets] = useState<{ dayPacks: number; nightPacks: number }>(() => {
+    try {
+      const raw = localStorage.getItem("mm_daily_targets");
+      if (raw) return JSON.parse(raw);
+    } catch (e) { console.warn("No se pudo leer mm_daily_targets", e); }
+    return { dayPacks: 11, nightPacks: 11 };
+  });
+  useEffect(() => {
+    try { localStorage.setItem("mm_daily_targets", JSON.stringify(dailyTargets)); } catch (e) { console.warn("No se pudo guardar mm_daily_targets", e); }
+  }, [dailyTargets]);
+
+  const TODAY_STR = new Date().toISOString().slice(0,10);
+  // Obtener data del día actual desde weekData (misma estructura que la tabla semanal)
+  const todayData = weekData.find(d => d.date === TODAY_STR) || {
+    date: TODAY_STR, reservations: [], envios_day_packages: 0, envios_night_packages: 0
+  };
+  const reservationsDay = todayData.reservations.filter(r => r.shift === 'dia').reduce((s, r) => s + r.amount, 0);
+  const reservationsNight = todayData.reservations.filter(r => r.shift === 'noche').reduce((s, r) => s + r.amount, 0);
+
+  const dayTargetValue = dailyTargets.dayPacks * ENVIO_RATES.day;     // $ objetivo en Día por envíos
+  const nightTargetValue = dailyTargets.nightPacks * ENVIO_RATES.night; // $ objetivo en Noche por envíos
+  const dayBaseValue = Math.max(0, dayTargetValue - reservationsDay);
+  const dayNeededPacks = Math.max(0, Math.ceil(dayBaseValue / ENVIO_RATES.day));
+  const dayRemainingPacks = Math.max(0, dayNeededPacks - (todayData.envios_day_packages || 0));
+  const dayShortfallValue = Math.max(0, dayBaseValue - (todayData.envios_day_packages || 0) * ENVIO_RATES.day);
+  const dayExcessValue = Math.max(0, (todayData.envios_day_packages || 0) * ENVIO_RATES.day - dayBaseValue);
+  const nightBaseValue = Math.max(0, nightTargetValue - reservationsNight);
+  const nightAdjustedValue = Math.max(0, nightBaseValue + dayShortfallValue - dayExcessValue);
+  const nightNeededPacks = Math.max(0, Math.ceil(nightAdjustedValue / ENVIO_RATES.night));
+  const nightRemainingPacks = Math.max(0, nightNeededPacks - (todayData.envios_night_packages || 0));
+
   // Paginación para tabla de cortes semanales
   const [cutsPage, setCutsPage] = useState(0);
   const cutsPageSize = 6;
@@ -387,6 +463,7 @@ export default function Dashboard() {
             Semana del {getWeekString()}
           </p>
         </div>
+        
         {/* Navegación de semanas */}
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => setCurrentWeekStart((d) => { const n = new Date(d); n.setDate(n.getDate() - 7); return n; })}>
@@ -416,18 +493,18 @@ export default function Dashboard() {
         <ModernStatCard
           title="Panel de Finanzas"
           value={formatCurrency(financialData.currentSavings)}
-          subtitle="Ahorro actual disponible"
+          subtitle="Ahorro actual disponible (corte semanal)"
           icon={DollarSign}
           variant="balance"
           trend={{ value: diffPct(financialData.currentSavings, financialData.currentSavings - weeklyTotals.total), label: "vs semana prev." }}
         />
         <ModernStatCard
-          title="Corte Semanal"
-          value={formatCurrency(weeklyTotals.total)}
-          subtitle={`Cobradas: ${formatCurrency(weeklyTotals.cobradas)} | A cobrar: ${formatCurrency(weeklyTotals.aCobrar)}`}
+          title="Corte Semanal (Neto)"
+          value={formatCurrency(weeklyTotals.net)}
+          subtitle={`Ing.: ${formatCurrency(weeklyTotals.total)} | Gtos.: ${formatCurrency(weeklyTotals.expensesTotal)} | Semanal`}
           icon={TrendingUp}
           variant="income"
-          trend={{ value: diffPct(weeklyTotals.total, prevWeekTotals.total), label: "vs semana prev." }}
+          trend={{ value: diffPct(weeklyTotals.net, prevWeekTotals.total), label: "vs semana prev." }}
           sparklineData={weeklyCuts.slice(-8).map(w => getWeekTotals(w.start).total)}
         />
         <ModernStatCard
@@ -546,25 +623,40 @@ export default function Dashboard() {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full">
+          <div>
+            <table className="w-full table-fixed text-sm">
+              <colgroup>
+                <col className="w-[120px]" />
+                <col className="w-[220px]" />
+                <col className="w-[90px]" />
+                <col className="w-[90px]" />
+                <col className="w-[80px]" />
+                <col className="w-[90px]" />
+                <col className="w-[110px]" />
+                <col className="w-[130px]" />
+                
+                <col className="w-[90px]" />
+                <col className="w-[90px]" />
+                <col className="w-[80px]" />
+              </colgroup>
               <thead>
-                <tr className="border-b border-border">
-                  <th className="text-left p-3 font-medium text-muted-foreground">Día</th>
-                  <th className="text-left p-3 font-medium text-muted-foreground">Reservas</th>
-                  <th className="text-right p-3 font-medium text-muted-foreground">Cobradas</th>
-                  <th className="text-right p-3 font-medium text-muted-foreground">A Cobrar</th>
-                  <th className="text-center p-3 font-medium text-muted-foreground">Paq. Día</th>
-                  <th className="text-center p-3 font-medium text-muted-foreground">Paq. Noche</th>
-                  <th className="text-center p-3 font-medium text-muted-foreground">Prop. Día</th>
-                  <th className="text-center p-3 font-medium text-muted-foreground">Prop. Noche</th>
-                  <th className="text-right p-3 font-medium text-muted-foreground">Envíos</th>
-                  <th className="text-right p-3 font-medium text-muted-foreground">Total</th>
-                  <th className="text-center p-3 font-medium text-muted-foreground">Acciones</th>
+                <tr className="border-b border-border text-xs">
+                  <th className="text-left p-2 font-medium text-muted-foreground whitespace-nowrap">Día</th>
+                  <th className="text-left p-2 font-medium text-muted-foreground whitespace-nowrap">Reservas</th>
+                  <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">Cobr.</th>
+                  <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">A Cob.</th>
+                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">PaqD</th>
+                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">PaqN</th>
+                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">Día a hacer</th>
+                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">Noche a hacer</th>
+                  <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">Env.</th>
+                  <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">Total</th>
+                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">Acc.</th>
                 </tr>
               </thead>
               <tbody>
-                {["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"].map((dayName, index) => {
+                {[
+"Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"].map((dayName, index) => {
                   const dayData = getDayData(index);
                   const dayDate = new Date(currentWeekStart);
                   dayDate.setDate(currentWeekStart.getDate() + index);
@@ -575,6 +667,50 @@ export default function Dashboard() {
                   const envios = (dayData.envios_day_packages * ENVIO_RATES.day) + (dayData.envios_night_packages * ENVIO_RATES.night);
                   const tips = (dayData.tip_day || 0) + (dayData.tip_night || 0);
                   const total = cobradas + envios + tips;
+
+                  // Cálculo de paquetes a hacer por turno (usa dailyTargets guardados)
+                  const resDay = dayData.reservations.filter(r => r.shift === 'dia').reduce((s, r) => s + r.amount, 0);
+                  const resNight = dayData.reservations.filter(r => r.shift === 'noche').reduce((s, r) => s + r.amount, 0);
+                  // Comparación de fechas en hora local (evita desfases por UTC)
+                  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+                  const thisDate = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate());
+                  const isPastOrToday = thisDate.getTime() <= todayStart.getTime();
+
+                  // Objetivo global hasta 5/10 (a partir de mañana)
+                  const GOAL_AMOUNT = 2050000;
+                  const tomorrow = new Date(todayStart); tomorrow.setDate(tomorrow.getDate() + 1);
+                  const goalDate = new Date(2025, 9, 5); // 5 Oct 2025
+                  const msDay = 1000*60*60*24;
+                  const totalDaysLeft = Math.max(0, Math.ceil((goalDate.getTime() - tomorrow.getTime()) / msDay) + 1);
+                  // Ahorro adicional informado por usuario (persistible)
+                  const additionalSavings = (() => {
+                    const v = localStorage.getItem('mm_additional_savings');
+                    if (v != null && !isNaN(parseInt(v))) return parseInt(v);
+                    // valor inicial por defecto según lo informado (950.000)
+                    return 950000;
+                  })();
+                  // Distribución de valor diario necesario en ARS
+                  const remainingGlobal = Math.max(0, GOAL_AMOUNT - (financialData.currentSavings + additionalSavings));
+                  const perDayTargetARS = totalDaysLeft > 0 ? Math.ceil(remainingGlobal / totalDaysLeft) : 0;
+                  // Reparto Día/Noche con prioridad Noche y boost fines de semana
+                  const dow = thisDate.getDay(); // 0=Dom,6=Sab
+                  const isWeekend = (dow === 5 || dow === 6 || dow === 0); // Vie/Sab/Dom
+                  const dayWeight = isWeekend ? 0.20 : 0.30;
+                  const nightWeight = 1 - dayWeight; // 0.80 u 0.70
+                  const dayValueTarget = Math.round(perDayTargetARS * dayWeight);
+                  const nightValueTarget = perDayTargetARS - dayValueTarget;
+
+                  // Aplicar reservas y lo ya hecho en ese turno
+                  const dayBaseGoal = Math.max(0, dayValueTarget - resDay);
+                  const dayDoneValue = (dayData.envios_day_packages || 0) * ENVIO_RATES.day;
+                  const dayRemainingValue = Math.max(0, dayBaseGoal - dayDoneValue);
+                  const dayLeft = isPastOrToday ? 0 : Math.max(0, Math.ceil(dayRemainingValue / ENVIO_RATES.day));
+
+                  // Noche compensa faltante de Día del mismo día
+                  const nightBaseGoal = Math.max(0, nightValueTarget - resNight);
+                  const nightDoneValue = (dayData.envios_night_packages || 0) * ENVIO_RATES.night;
+                  const nightAdjustedValue = Math.max(0, nightBaseGoal - nightDoneValue + dayRemainingValue);
+                  const nightLeft = isPastOrToday ? 0 : Math.max(0, Math.ceil(nightAdjustedValue / ENVIO_RATES.night));
 
                   return (
                     <tr key={index} className="border-b border-border/50 hover:bg-muted/20 transition-colors">
@@ -587,39 +723,45 @@ export default function Dashboard() {
                       <td className="p-3">
                         <div className="space-y-1 max-w-xs">
                           {dayData.reservations.map((res) => (
-                            <div key={res.id} className="flex items-center justify-between text-xs bg-muted/50 rounded px-2 py-1">
-                              <div className="flex items-center gap-2">
-                                <img
-                                  src={getLocalLogo(res.local)}
-                                  alt={res.local}
-                                  className="h-4 w-4 rounded-sm"
-                                  onError={(e: SyntheticEvent<HTMLImageElement>) => {
-                                    const seed = encodeURIComponent(res.local);
-                                    (e.currentTarget as HTMLImageElement).src = `https://api.dicebear.com/7.x/initials/svg?seed=${seed}`;
-                                  }}
-                                />
-                                <span className="font-medium">{res.local}</span>
+                            <div key={res.id} className="text-xs bg-muted/50 rounded px-2 py-1">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <img
+                                    src={getLocalLogo(res.local)}
+                                    alt={res.local}
+                                    className="h-4 w-4 rounded-sm"
+                                    onError={(e: SyntheticEvent<HTMLImageElement>) => {
+                                      const seed = encodeURIComponent(res.local);
+                                      (e.currentTarget as HTMLImageElement).src = `https://api.dicebear.com/7.x/initials/svg?seed=${seed}`;
+                                    }}
+                                  />
+                                  <button type="button" className="font-medium hover:underline" onClick={() => setOpenResId(id => id === res.id ? null : res.id)}>
+                                    {res.local}
+                                  </button>
+                                </div>
+                                <span className="text-muted-foreground">${res.amount.toLocaleString('es-AR')}</span>
                               </div>
-                              <div className="flex items-center space-x-1">
-                                <Select value={res.status} onValueChange={(value: Reservation["status"]) => updateReservationStatus(res.id, value)}>
-                                  <SelectTrigger className="h-6 w-20 text-xs border-0 bg-transparent">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="reservado">Reservado</SelectItem>
-                                    <SelectItem value="facturado">Facturado</SelectItem>
-                                    <SelectItem value="cobrado">Cobrado</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                                <Button size="icon" variant="ghost" className="h-6 w-6" title="Eliminar"
-                                  onClick={() => setWeekData(prev => prev.map(d => d.date === dateString ? ({...d, reservations: d.reservations.filter(r => r.id !== res.id)}) : d))}
-                                >
-                                  ×
-                                </Button>
-                              </div>
+                              {openResId === res.id && (
+                                <div className="mt-1 flex items-center gap-2">
+                                  <Select value={res.status} onValueChange={(value: Reservation["status"]) => updateReservationStatus(res.id, value)}>
+                                    <SelectTrigger className="h-6 w-28 text-xs">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="reservado">Reservado</SelectItem>
+                                      <SelectItem value="facturado">Facturado</SelectItem>
+                                      <SelectItem value="cobrado">Cobrado</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                  <Button size="sm" variant="ghost" className="h-6 px-2" title="Eliminar"
+                                    onClick={() => setWeekData(prev => prev.map(d => d.date === dateString ? ({...d, reservations: d.reservations.filter(r => r.id !== res.id)}) : d))}
+                                  >
+                                    Eliminar
+                                  </Button>
+                                </div>
+                              )}
                             </div>
                           ))}
-
                           {showNewReservation === dateString && (
                             <div className="space-y-2 p-2 bg-background rounded border">
                               <Input
@@ -673,50 +815,24 @@ export default function Dashboard() {
                       <td className="p-3 text-right">
                         <span className="font-semibold text-goal">{formatCurrency(aCobrar)}</span>
                       </td>
-                      <td className="p-3 text-center">
+                      <td className="p-2 text-center">
                         <Input
                           type="number"
                           value={dayData.envios_day_packages}
                           onChange={(e) => updatePackages(dateString, "day", parseInt(e.target.value) || 0)}
-                          className="w-16 h-8 text-center text-xs"
+                          className="w-14 h-8 text-center text-xs"
                         />
                       </td>
-                      <td className="p-3 text-center">
+                      <td className="p-2 text-center">
                         <Input
                           type="number"
                           value={dayData.envios_night_packages}
                           onChange={(e) => updatePackages(dateString, "night", parseInt(e.target.value) || 0)}
-                          className="w-16 h-8 text-center text-xs"
+                          className="w-14 h-8 text-center text-xs"
                         />
                       </td>
-                      <td className="p-3 text-center">
-                        <Input
-                          type="number"
-                          value={dayData.tip_day || 0}
-                          onChange={(e) => setWeekData(prev => {
-                            const u = [...prev];
-                            const idx = u.findIndex(d => d.date === dateString);
-                            if (idx >= 0) u[idx] = { ...u[idx], tip_day: parseInt(e.target.value) || 0 };
-                            else u.push({ date: dateString, reservations: [], envios_day_packages: 0, envios_night_packages: 0, tip_day: parseInt(e.target.value) || 0, tip_night: 0 });
-                            return u;
-                          })}
-                          className="w-20 h-8 text-center text-xs"
-                        />
-                      </td>
-                      <td className="p-3 text-center">
-                        <Input
-                          type="number"
-                          value={dayData.tip_night || 0}
-                          onChange={(e) => setWeekData(prev => {
-                            const u = [...prev];
-                            const idx = u.findIndex(d => d.date === dateString);
-                            if (idx >= 0) u[idx] = { ...u[idx], tip_night: parseInt(e.target.value) || 0 };
-                            else u.push({ date: dateString, reservations: [], envios_day_packages: 0, envios_night_packages: 0, tip_day: 0, tip_night: parseInt(e.target.value) || 0 });
-                            return u;
-                          })}
-                          className="w-20 h-8 text-center text-xs"
-                        />
-                      </td>
+                      <td className="p-2 text-center font-semibold">{dayLeft}</td>
+                      <td className="p-2 text-center font-semibold">{nightLeft}</td>
                       <td className="p-3 text-right">
                         <span className="font-medium">{formatCurrency(envios)}</span>
                       </td>
