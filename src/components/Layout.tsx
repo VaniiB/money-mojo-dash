@@ -4,10 +4,10 @@ import { cn } from "@/lib/utils";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: Home },
-  { name: "Ingresos", href: "/ingresos", icon: TrendingUp },
+  // { name: "Ingresos", href: "/ingresos", icon: TrendingUp }, // oculto por pedido del usuario
   { name: "Gastos", href: "/gastos", icon: TrendingDown },
   { name: "Objetivos", href: "/objetivos", icon: Target },
-  { name: "Reportes", href: "/reportes", icon: BarChart3 },
+  // { name: "Reportes", href: "/reportes", icon: BarChart3 }, // oculto por pedido del usuario
 ];
 
 export default function Layout() {

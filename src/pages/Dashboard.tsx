@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, type SyntheticEvent } from "react";
-import { DollarSign, TrendingUp, Target, Plus } from "lucide-react";
+import { useState, useEffect, useMemo, type SyntheticEvent, useRef } from "react";
+import { DollarSign, TrendingUp, Target, Plus, Star } from "lucide-react";
 
 import ModernStatCard from "@/components/ModernStatCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +16,12 @@ interface Reservation {
   shift: "dia" | "noche";
   status: "reservado" | "facturado" | "cobrado";
 }
+
+type KnownLocal = {
+  name: string;
+  logoUrl?: string;
+  favorite?: boolean;
+};
 
 interface DayData {
   date: string;
@@ -92,6 +98,31 @@ export default function Dashboard() {
   });
   // Edición por fila: paquetes pendientes a aplicar
   const [pendingPackages, setPendingPackages] = useState<Record<string, { day: number; night: number }>>({});
+  // Base de locales conocidos (para sugerencias y logos)
+  const [knownLocals, setKnownLocals] = useState<KnownLocal[]>([]);
+  // Edición del local (cuando abrís un chip)
+  const [editLocal, setEditLocal] = useState<{ name: string; logoUrl: string }>({ name: "", logoUrl: "" });
+  // Google Places
+  const [googleLoaded, setGoogleLoaded] = useState(false);
+  const [placePredictions, setPlacePredictions] = useState<Array<{ description: string; place_id: string }>>([]);
+  const [placesLoading, setPlacesLoading] = useState(false);
+  const placeDebounceRef = useRef<number | null>(null);
+
+  const isFavoriteLocal = (name: string) => {
+    return knownLocals.some(k => k.name.toLowerCase() === name.toLowerCase() && !!k.favorite);
+  };
+  const toggleFavoriteLocal = (name: string, logoUrl?: string) => {
+    setKnownLocals(prev => {
+      const idx = prev.findIndex(k => k.name.toLowerCase() === name.toLowerCase());
+      const updated = [...prev];
+      if (idx >= 0) {
+        updated[idx] = { ...updated[idx], favorite: !updated[idx].favorite, logoUrl: updated[idx].logoUrl || logoUrl };
+      } else {
+        updated.push({ name, logoUrl, favorite: true });
+      }
+      return updated;
+    });
+  };
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat("es-AR", {
@@ -133,6 +164,61 @@ export default function Dashboard() {
       localStorage.setItem('mm_flex_settings', JSON.stringify(settings));
     } catch (e) { console.warn('No se pudo guardar mm_flex_settings', e); }
   }, [settings]);
+
+  // Cargar Google Places usando API Key desde variables de entorno (Vite: VITE_GOOGLE_API_KEY)
+  useEffect(() => {
+    const env = (import.meta as unknown as { env?: Record<string, string> }).env || {} as Record<string,string>;
+    const apiKey = env.VITE_GOOGLE_API_KEY || "";
+    if (!apiKey) return;
+    if ((window as unknown as { google?: any }).google?.maps?.places) { setGoogleLoaded(true); return; }
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&language=es&region=AR`;
+    script.async = true;
+    script.onload = () => setGoogleLoaded(true);
+    script.onerror = () => setGoogleLoaded(false);
+    document.head.appendChild(script);
+  }, []);
+
+  const searchPlacesOnline = (query: string) => {
+    if (!googleLoaded || !query) { setPlacePredictions([]); return; }
+    try {
+      setPlacesLoading(true);
+      const svc = new (window as unknown as { google: any }).google.maps.places.AutocompleteService();
+      svc.getPlacePredictions({ input: query, componentRestrictions: { country: 'ar' } }, (preds: any[], status: string) => {
+        setPlacesLoading(false);
+        if (!Array.isArray(preds)) { setPlacePredictions([]); return; }
+        setPlacePredictions(preds.map(p => ({ description: p.description, place_id: p.place_id })));
+      });
+    } catch {
+      setPlacesLoading(false);
+    }
+  };
+
+  const pickPlacePrediction = (placeId: string) => {
+    if (!googleLoaded) return;
+    try {
+      const svc = new (window as unknown as { google: any }).google.maps.places.PlacesService(document.createElement('div'));
+      svc.getDetails({ placeId, fields: ['name','photos'] }, (details: any, status: string) => {
+        if (!details) return;
+        const name = details.name || editLocal.name;
+        const photoUrl = details.photos && details.photos[0] ? details.photos[0].getUrl({ maxWidth: 128, maxHeight: 128 }) : '';
+        setEditLocal({ name, logoUrl: photoUrl });
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  // Cargar/salvar locales conocidos
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('mm_known_locals');
+      if (raw) setKnownLocals(JSON.parse(raw));
+    } catch (e) { console.warn('No se pudo leer mm_known_locals', e); }
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem('mm_known_locals', JSON.stringify(knownLocals)); } catch (e) { console.warn('No se pudo guardar mm_known_locals', e); }
+  }, [knownLocals]);
 
   // Mostrar opciones de una reserva al hacer click en el nombre (por chip)
   const [openResId, setOpenResId] = useState<string | null>(null);
@@ -305,9 +391,13 @@ export default function Dashboard() {
     "Zona Norte": "zonanorte.com.ar"
   };
   const getLocalLogo = (local: string) => {
+    // 1) Local conocido con URL explícita
+    const k = knownLocals.find(k => k.name.toLowerCase() === local.toLowerCase());
+    if (k?.logoUrl) return k.logoUrl;
+    // 2) Fallback: dominio conocido
     const domain = knownLocalDomains[local];
     if (domain) return `https://logo.clearbit.com/${domain}`;
-    // Intento con nombre + .com.ar como heurística mínima
+    // 3) Heurística simple con .com.ar
     const simple = local.toLowerCase().replace(/\s+/g, "");
     return `https://logo.clearbit.com/${simple}.com.ar`;
   };
@@ -658,6 +748,7 @@ export default function Dashboard() {
                 monday.setDate(today.getDate() - today.getDay() + 1);
                 setCurrentWeekStart(monday);
               }}>Ir a semana actual</Button>
+              {/* API Key: se carga desde VITE_GOOGLE_API_KEY, sin UI */}
             </div>
           </div>
         </CardHeader>
@@ -820,6 +911,12 @@ export default function Dashboard() {
                                   <button type="button" className="font-medium hover:underline" onClick={() => setOpenResId(id => id === res.id ? null : res.id)}>
                                     {res.local}
                                   </button>
+                                  <Button size="icon" variant={isFavoriteLocal(res.local) ? "secondary" : "ghost"} className="h-5 w-5"
+                                    title={isFavoriteLocal(res.local) ? "Quitar de favoritos" : "Guardar como favorito"}
+                                    onClick={() => toggleFavoriteLocal(res.local, getLocalLogo(res.local))}
+                                  >
+                                    <Star className="h-3 w-3" fill={isFavoriteLocal(res.local) ? "currentColor" : "none"} />
+                                  </Button>
                                 </div>
                                 <span className="text-muted-foreground">${res.amount.toLocaleString('es-AR')}</span>
                               </div>
@@ -840,6 +937,67 @@ export default function Dashboard() {
                                   >
                                     Eliminar
                                   </Button>
+                                </div>
+                              )}
+                              {openResId === res.id && (
+                                <div className="mt-2 space-y-2">
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      placeholder="Buscar/editar nombre del local"
+                                      value={editLocal.name || res.local}
+                                      onFocus={() => setEditLocal({ name: res.local, logoUrl: "" })}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        setEditLocal((p) => ({ ...p, name: val }));
+                                        // Autocomplete online (debounce)
+                                        if (placeDebounceRef.current) window.clearTimeout(placeDebounceRef.current);
+                                        placeDebounceRef.current = window.setTimeout(() => searchPlacesOnline(val), 350);
+                                      }}
+                                      className="h-7 text-xs"
+                                    />
+                                    <Button size="sm" className="h-7"
+                                      onClick={() => {
+                                        const name = (editLocal.name || res.local).trim();
+                                        // actualizar reserva
+                                        setWeekData(prev => prev.map(day => day.date === dateString ? ({
+                                          ...day,
+                                          reservations: day.reservations.map(r => r.id === res.id ? ({ ...r, local: name }) : r)
+                                        }) : day));
+                                        // guardar/actualizar en locales conocidos
+                                        setKnownLocals(prev => {
+                                          const idx = prev.findIndex(k => k.name.toLowerCase() === name.toLowerCase());
+                                          const updated = [...prev];
+                                          const entry = { name } as KnownLocal;
+                                          if (idx >= 0) updated[idx] = { ...updated[idx], ...entry };
+                                          else updated.push(entry);
+                                          return updated;
+                                        });
+                                        setEditLocal({ name: "", logoUrl: "" });
+                                      }}
+                                    >Guardar</Button>
+                                  </div>
+                                  {/* Sugerencias rápidas (locales conocidos) */}
+                                  <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
+                                    {knownLocals
+                                      .filter(k => (editLocal.name || res.local).length === 0 ? true : k.name.toLowerCase().includes((editLocal.name || res.local).toLowerCase()))
+                                      .slice(0,6)
+                                      .map(k => (
+                                        <Button key={k.name} size="sm" variant="outline" className="h-6"
+                                          onClick={() => setEditLocal({ name: k.name, logoUrl: k.logoUrl || "" })}
+                                        >{k.name}</Button>
+                                      ))}
+                                  </div>
+                                  {/* Resultados online (Google Places) */}
+                                  {googleLoaded && (
+                                    <div className="flex flex-wrap gap-1 text-[11px] text-muted-foreground">
+                                      {placesLoading && <span>Buscando...</span>}
+                                      {!placesLoading && placePredictions.slice(0,6).map(p => (
+                                        <Button key={p.place_id} size="sm" variant="ghost" className="h-6"
+                                          onClick={() => pickPlacePrediction(p.place_id)}
+                                        >{p.description}</Button>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -939,6 +1097,7 @@ export default function Dashboard() {
                               const n = Math.max(0, pend.night|0);
                               updatePackages(dateString, "day", d);
                               updatePackages(dateString, "night", n);
+                              setPendingPackages(prev => ({...prev, [dateString]: { day: d, night: n }}));
                             }}
                           >Aplicar</Button>
                         </div>
