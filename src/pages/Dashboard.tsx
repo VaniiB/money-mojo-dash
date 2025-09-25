@@ -49,7 +49,7 @@ const mockWeekData: DayData[] = [
 
 // Financial base data (updated goal and deadline)
 const initialFinancialData = {
-  currentSavings: 120000,
+  currentSavings: 215000,
   pendingPayments: {
     rapiboy: 75000,
     other: 98000
@@ -90,6 +90,8 @@ export default function Dashboard() {
     person: "vanina" as "vanina" | "leonardo",
     shift: "dia" as "dia" | "noche"
   });
+  // Edición por fila: paquetes pendientes a aplicar
+  const [pendingPackages, setPendingPackages] = useState<Record<string, { day: number; night: number }>>({});
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat("es-AR", {
@@ -98,6 +100,39 @@ export default function Dashboard() {
       minimumFractionDigits: 0,
     }).format(amount);
   };
+
+  // Configuración de planificación Flex (persistente)
+  const [settings, setSettings] = useState({
+    additionalSavings: 950000, // ahorro adicional confirmado (p.e. préstamo)
+    nightWeightWeekday: 70,    // % peso Noche entre semana
+    nightWeightWeekend: 80,    // % peso Noche finde (vie/sáb/dom)
+    weekendNightMin: 10,       // mínimo de paquetes Noche en finde
+    minDayAll: 1,              // mínimo paquetes de Día (todos los días)
+    minNightWeekday: 1,        // mínimo paquetes de Noche entre semana
+  });
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('mm_flex_settings');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        setSettings((prev) => ({
+          additionalSavings: typeof parsed.additionalSavings === 'number' ? parsed.additionalSavings : prev.additionalSavings,
+          nightWeightWeekday: typeof parsed.nightWeightWeekday === 'number' ? parsed.nightWeightWeekday : prev.nightWeightWeekday,
+          nightWeightWeekend: typeof parsed.nightWeightWeekend === 'number' ? parsed.nightWeightWeekend : prev.nightWeightWeekend,
+          weekendNightMin: typeof parsed.weekendNightMin === 'number' ? parsed.weekendNightMin : prev.weekendNightMin,
+          minDayAll: typeof parsed.minDayAll === 'number' ? parsed.minDayAll : prev.minDayAll,
+          minNightWeekday: typeof parsed.minNightWeekday === 'number' ? parsed.minNightWeekday : prev.minNightWeekday,
+        }));
+      }
+    } catch (e) { console.warn('No se pudo leer mm_flex_settings', e); }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('mm_flex_settings', JSON.stringify(settings));
+    } catch (e) { console.warn('No se pudo guardar mm_flex_settings', e); }
+  }, [settings]);
 
   // Mostrar opciones de una reserva al hacer click en el nombre (por chip)
   const [openResId, setOpenResId] = useState<string | null>(null);
@@ -227,9 +262,10 @@ export default function Dashboard() {
 
     // Total reservas = cobradas + aCobrar (contamos todas las reservas, no solo cobradas)
     const reservasTotal = cobradas + aCobrar;
-    const totalConReservas = reservasTotal + enviosTotal + tipsTotal;
+    // Pedido del usuario: Total = Reservas (todas) + Envíos (sin propinas)
+    const totalConReservasSinProp = reservasTotal + enviosTotal;
 
-    return { cobradas, aCobrar, enviosTotal, tipsTotal, total: totalConReservas, expensesTotal, net: totalConReservas - expensesTotal };
+    return { cobradas, aCobrar, enviosTotal, tipsTotal, total: totalConReservasSinProp, expensesTotal, net: totalConReservasSinProp - expensesTotal };
   };
 
   const calculatePackagesNeeded = () => {
@@ -394,7 +430,10 @@ export default function Dashboard() {
 
   const weeklyTotals = calculateWeeklyTotals();
   const packagesCalc = calculatePackagesNeeded();
-  const motoProgress = (financialData.motoGoal.current / financialData.motoGoal.target) * 100;
+  // Mostrar progreso y ahorro incluyendo ahorro adicional (p.e. préstamo)
+  const displaySavings = financialData.currentSavings + settings.additionalSavings;
+  const displayMotoCurrent = financialData.motoGoal.current + settings.additionalSavings;
+  const motoProgress = (displayMotoCurrent / financialData.motoGoal.target) * 100;
   // Tendencias semana previa
   const prevWeekStart = useMemo(() => {
     const d = new Date(currentWeekStart);
@@ -454,7 +493,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 px-4 md:px-6 lg:px-8">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-8 gap-3">
         <div>
@@ -492,8 +531,8 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
         <ModernStatCard
           title="Panel de Finanzas"
-          value={formatCurrency(financialData.currentSavings)}
-          subtitle="Ahorro actual disponible (corte semanal)"
+          value={formatCurrency(displaySavings)}
+          subtitle="Ahorro actual disponible (incluye préstamo)"
           icon={DollarSign}
           variant="balance"
           trend={{ value: diffPct(financialData.currentSavings, financialData.currentSavings - weeklyTotals.total), label: "vs semana prev." }}
@@ -510,13 +549,13 @@ export default function Dashboard() {
         <ModernStatCard
           title="Progreso Moto"
           value={`${motoProgress.toFixed(1)}%`}
-          subtitle={`${formatCurrency(financialData.motoGoal.current)} de ${formatCurrency(financialData.motoGoal.target)}`}
+          subtitle={`${formatCurrency(displayMotoCurrent)} de ${formatCurrency(financialData.motoGoal.target)}`}
           icon={Target}
           variant="goal"
           progressPercent={motoProgress}
           trend={{ value: diffPct(financialData.motoGoal.current, financialData.motoGoal.current - weeklyTotals.total), label: "avance" }}
           sparklineData={weeklyCuts.slice(-8).map(w => {
-            const pct = (financialData.motoGoal.current / financialData.motoGoal.target) * 100;
+            const pct = (displayMotoCurrent / financialData.motoGoal.target) * 100;
             return parseFloat(pct.toFixed(1));
           })}
         />
@@ -622,9 +661,86 @@ export default function Dashboard() {
             </div>
           </div>
         </CardHeader>
-        <CardContent>
-          <div>
-            <table className="w-full table-fixed text-sm">
+        <CardContent className="px-6">
+          {/* Pre-cálculo secuencial con acarreo de faltantes (desde mañana hasta 05/10) */}
+          {(() => {
+            try {
+              const goalDate = new Date(2025, 9, 5);
+              const today0 = new Date(); today0.setHours(0,0,0,0);
+              const tomorrow0 = new Date(today0); tomorrow0.setDate(tomorrow0.getDate() + 1);
+              const msDay = 1000*60*60*24;
+              // Armar lista de fechas desde mañana hasta 05/10
+              const dates: string[] = [];
+              for (let d = new Date(tomorrow0); d <= goalDate; d.setDate(d.getDate() + 1)) {
+                dates.push(d.toISOString().split('T')[0]);
+              }
+              // Calcular faltante global
+              const currentTotal = financialData.currentSavings + settings.additionalSavings;
+              let totalFutureReservations = 0;
+              let totalFuturePackages = 0;
+              dates.forEach(ds => {
+                const dd = weekData.find(w => w.date === ds) || { date: ds, reservations: [], envios_day_packages: 0, envios_night_packages: 0 };
+                totalFutureReservations += dd.reservations.reduce((s, r) => s + r.amount, 0);
+                totalFuturePackages += (dd.envios_day_packages * ENVIO_RATES.day) + (dd.envios_night_packages * ENVIO_RATES.night);
+              });
+              const remainingAmount = Math.max(0, 2050000 - currentTotal - totalFutureReservations - totalFuturePackages);
+              const perDayValue = dates.length > 0 ? Math.ceil(remainingAmount / dates.length) : 0;
+
+              // Calcular acarreo desde HOY (si hoy no cumplió su objetivo por turno)
+              const todayStr = today0.toISOString().split('T')[0];
+              const todayData = weekData.find(w => w.date === todayStr) || { date: todayStr, reservations: [], envios_day_packages: 0, envios_night_packages: 0 };
+              const dowToday = today0.getDay();
+              const isWeekendToday = (dowToday === 5 || dowToday === 6 || dowToday === 0);
+              const nightWeightToday = (isWeekendToday ? settings.nightWeightWeekend : settings.nightWeightWeekday) / 100;
+              const dayWeightToday = Math.max(0, 1 - nightWeightToday);
+              const dayTargetToday = perDayValue * dayWeightToday;
+              const nightTargetToday = perDayValue * nightWeightToday;
+              const resDayToday = todayData.reservations.filter(r => r.shift === 'dia').reduce((s, r) => s + r.amount, 0);
+              const resNightToday = todayData.reservations.filter(r => r.shift === 'noche').reduce((s, r) => s + r.amount, 0);
+              const dayAfterResToday = Math.max(0, dayTargetToday - resDayToday);
+              const nightAfterResToday = Math.max(0, nightTargetToday - resNightToday);
+              const dayAfterDoneToday = Math.max(0, dayAfterResToday - (todayData.envios_day_packages * ENVIO_RATES.day));
+              const nightAfterDoneToday = Math.max(0, nightAfterResToday - (todayData.envios_night_packages * ENVIO_RATES.night));
+              const ceilDiv = (val: number, rate: number) => Math.max(0, Math.floor((val + rate - 1) / rate));
+              let carryDayPacks = ceilDiv(dayAfterDoneToday, ENVIO_RATES.day);
+              let carryNightPacks = ceilDiv(nightAfterDoneToday, ENVIO_RATES.night);
+              // aplicar mínimos al acarreo también
+              carryDayPacks = Math.max(0, carryDayPacks);
+              carryNightPacks = Math.max(0, carryNightPacks);
+              const plan: Record<string, {dayLeft: number; nightLeft: number}> = {};
+              dates.forEach((ds, idx) => {
+                const d = new Date(ds);
+                const dd = weekData.find(w => w.date === ds) || { date: ds, reservations: [], envios_day_packages: 0, envios_night_packages: 0 };
+                const resDay = dd.reservations.filter(r => r.shift === 'dia').reduce((s, r) => s + r.amount, 0);
+                const resNight = dd.reservations.filter(r => r.shift === 'noche').reduce((s, r) => s + r.amount, 0);
+                const dow = d.getDay();
+                const isWeekend = (dow === 5 || dow === 6 || dow === 0);
+                const nightWeight = (isWeekend ? settings.nightWeightWeekend : settings.nightWeightWeekday) / 100;
+                const dayWeight = Math.max(0, 1 - nightWeight);
+                // objetivos por turno + acarreo del día anterior (en valor)
+                const dayTargetValue = perDayValue * dayWeight + carryDayPacks * ENVIO_RATES.day;
+                const nightTargetValue = perDayValue * nightWeight + carryNightPacks * ENVIO_RATES.night;
+                const dayAfterRes = Math.max(0, dayTargetValue - resDay);
+                const nightAfterRes = Math.max(0, nightTargetValue - resNight);
+                const dayAfterDone = Math.max(0, dayAfterRes - (dd.envios_day_packages * ENVIO_RATES.day));
+                const nightAfterDone = Math.max(0, nightAfterRes - (dd.envios_night_packages * ENVIO_RATES.night));
+                let dayLeft = ceilDiv(dayAfterDone, ENVIO_RATES.day);
+                let nightLeft = ceilDiv(nightAfterDone, ENVIO_RATES.night);
+                // mínimos
+                dayLeft = Math.max(settings.minDayAll, dayLeft);
+                nightLeft = Math.max(isWeekend ? settings.weekendNightMin : settings.minNightWeekday, nightLeft);
+                plan[ds] = { dayLeft, nightLeft };
+                // El acarreo solo se calcula desde HOY hacia MAÑANA. Para el resto de días no propagamos.
+                carryDayPacks = 0;
+                carryNightPacks = 0;
+              });
+              (window as unknown as { __mm_planByDate?: Record<string, {dayLeft: number; nightLeft: number}> }).__mm_planByDate = plan;
+            } catch (e) { console.warn('plan precompute failed', e); }
+            return null;
+          })()}
+          {/* Contenedor responsivo: evita desbordes y mantiene todo dentro del card */}
+          <div className="overflow-x-auto">
+              <table className="w-full table-auto text-sm min-w-[1100px]">
               <colgroup>
                 <col className="w-[120px]" />
                 <col className="w-[220px]" />
@@ -637,11 +753,11 @@ export default function Dashboard() {
                 
                 <col className="w-[90px]" />
                 <col className="w-[90px]" />
-                <col className="w-[80px]" />
+                <col className="w-[120px]" />
               </colgroup>
               <thead>
                 <tr className="border-b border-border text-xs">
-                  <th className="text-left p-2 font-medium text-muted-foreground whitespace-nowrap">Día</th>
+                  <th className="text-left p-2 pl-6 font-medium text-muted-foreground whitespace-nowrap">Día</th>
                   <th className="text-left p-2 font-medium text-muted-foreground whitespace-nowrap">Reservas</th>
                   <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">Cobr.</th>
                   <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">A Cob.</th>
@@ -651,7 +767,7 @@ export default function Dashboard() {
                   <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">Noche a hacer</th>
                   <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">Env.</th>
                   <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">Total</th>
-                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">Acc.</th>
+                  <th className="text-center p-2 pr-6 font-medium text-muted-foreground whitespace-nowrap">Acc.</th>
                 </tr>
               </thead>
               <tbody>
@@ -665,56 +781,22 @@ export default function Dashboard() {
                   const cobradas = dayData.reservations.filter(r => r.status === "cobrado").reduce((sum, r) => sum + r.amount, 0);
                   const aCobrar = dayData.reservations.filter(r => r.status !== "cobrado").reduce((sum, r) => sum + r.amount, 0);
                   const envios = (dayData.envios_day_packages * ENVIO_RATES.day) + (dayData.envios_night_packages * ENVIO_RATES.night);
-                  const tips = (dayData.tip_day || 0) + (dayData.tip_night || 0);
-                  const total = cobradas + envios + tips;
+                  const reservasDiaTotal = cobradas + aCobrar;
+                  const total = reservasDiaTotal + envios;
 
                   // Cálculo de paquetes a hacer por turno (usa dailyTargets guardados)
-                  const resDay = dayData.reservations.filter(r => r.shift === 'dia').reduce((s, r) => s + r.amount, 0);
-                  const resNight = dayData.reservations.filter(r => r.shift === 'noche').reduce((s, r) => s + r.amount, 0);
-                  // Comparación de fechas en hora local (evita desfases por UTC)
                   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
                   const thisDate = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate());
                   const isPastOrToday = thisDate.getTime() <= todayStart.getTime();
-
-                  // Objetivo global hasta 5/10 (a partir de mañana)
-                  const GOAL_AMOUNT = 2050000;
-                  const tomorrow = new Date(todayStart); tomorrow.setDate(tomorrow.getDate() + 1);
-                  const goalDate = new Date(2025, 9, 5); // 5 Oct 2025
-                  const msDay = 1000*60*60*24;
-                  const totalDaysLeft = Math.max(0, Math.ceil((goalDate.getTime() - tomorrow.getTime()) / msDay) + 1);
-                  // Ahorro adicional informado por usuario (persistible)
-                  const additionalSavings = (() => {
-                    const v = localStorage.getItem('mm_additional_savings');
-                    if (v != null && !isNaN(parseInt(v))) return parseInt(v);
-                    // valor inicial por defecto según lo informado (950.000)
-                    return 950000;
-                  })();
-                  // Distribución de valor diario necesario en ARS
-                  const remainingGlobal = Math.max(0, GOAL_AMOUNT - (financialData.currentSavings + additionalSavings));
-                  const perDayTargetARS = totalDaysLeft > 0 ? Math.ceil(remainingGlobal / totalDaysLeft) : 0;
-                  // Reparto Día/Noche con prioridad Noche y boost fines de semana
-                  const dow = thisDate.getDay(); // 0=Dom,6=Sab
-                  const isWeekend = (dow === 5 || dow === 6 || dow === 0); // Vie/Sab/Dom
-                  const dayWeight = isWeekend ? 0.20 : 0.30;
-                  const nightWeight = 1 - dayWeight; // 0.80 u 0.70
-                  const dayValueTarget = Math.round(perDayTargetARS * dayWeight);
-                  const nightValueTarget = perDayTargetARS - dayValueTarget;
-
-                  // Aplicar reservas y lo ya hecho en ese turno
-                  const dayBaseGoal = Math.max(0, dayValueTarget - resDay);
-                  const dayDoneValue = (dayData.envios_day_packages || 0) * ENVIO_RATES.day;
-                  const dayRemainingValue = Math.max(0, dayBaseGoal - dayDoneValue);
-                  const dayLeft = isPastOrToday ? 0 : Math.max(0, Math.ceil(dayRemainingValue / ENVIO_RATES.day));
-
-                  // Noche compensa faltante de Día del mismo día
-                  const nightBaseGoal = Math.max(0, nightValueTarget - resNight);
-                  const nightDoneValue = (dayData.envios_night_packages || 0) * ENVIO_RATES.night;
-                  const nightAdjustedValue = Math.max(0, nightBaseGoal - nightDoneValue + dayRemainingValue);
-                  const nightLeft = isPastOrToday ? 0 : Math.max(0, Math.ceil(nightAdjustedValue / ENVIO_RATES.night));
+                  const ds = dateString;
+                  const p = (window as unknown as { __mm_planByDate?: Record<string, {dayLeft: number; nightLeft: number}> }).__mm_planByDate;
+                  const computed = (!isPastOrToday && p) ? p[ds] : undefined;
+                  const dayLeft = computed?.dayLeft ?? 0;
+                  const nightLeft = computed?.nightLeft ?? 0;
 
                   return (
                     <tr key={index} className="border-b border-border/50 hover:bg-muted/20 transition-colors">
-                      <td className="p-3">
+                      <td className="p-3 pl-6">
                         <div>
                           <div className="font-medium">{dayName}</div>
                           <div className="text-xs text-muted-foreground">{dayDate.getDate()}/{dayDate.getMonth() + 1}</div>
@@ -818,16 +900,22 @@ export default function Dashboard() {
                       <td className="p-2 text-center">
                         <Input
                           type="number"
-                          value={dayData.envios_day_packages}
-                          onChange={(e) => updatePackages(dateString, "day", parseInt(e.target.value) || 0)}
+                          value={(pendingPackages[dateString]?.day ?? dayData.envios_day_packages)}
+                          onChange={(e) => {
+                            const v = Math.max(0, parseInt(e.target.value) || 0);
+                            setPendingPackages(prev => ({...prev, [dateString]: { day: v, night: (prev[dateString]?.night ?? dayData.envios_night_packages) }}));
+                          }}
                           className="w-14 h-8 text-center text-xs"
                         />
                       </td>
                       <td className="p-2 text-center">
                         <Input
                           type="number"
-                          value={dayData.envios_night_packages}
-                          onChange={(e) => updatePackages(dateString, "night", parseInt(e.target.value) || 0)}
+                          value={(pendingPackages[dateString]?.night ?? dayData.envios_night_packages)}
+                          onChange={(e) => {
+                            const v = Math.max(0, parseInt(e.target.value) || 0);
+                            setPendingPackages(prev => ({...prev, [dateString]: { day: (prev[dateString]?.day ?? dayData.envios_day_packages), night: v }}));
+                          }}
                           className="w-14 h-8 text-center text-xs"
                         />
                       </td>
@@ -837,23 +925,29 @@ export default function Dashboard() {
                         <span className="font-medium">{formatCurrency(envios)}</span>
                       </td>
                       <td className="p-3 text-right">
-                        <span className="font-bold text-balance">{formatCurrency(total)}</span>
+                        <span className="font-bold">{formatCurrency(total)}</span>
                       </td>
-                      <td className="p-3 text-center">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setShowNewReservation(showNewReservation === dateString ? null : dateString)}
-                          className="h-8 w-8 p-0"
-                        >
-                          <Plus className="h-4 w-4" />
-                        </Button>
+                      <td className="p-3 text-center pr-4">
+                        <div className="flex items-center justify-center gap-1">
+                          <Button size="icon" variant="outline" className="h-7 w-7" title="Agregar reserva" onClick={() => setShowNewReservation(dateString)}>
+                            <Plus className="h-4 w-4" />
+                          </Button>
+                          <Button size="sm" variant="secondary" title="Aplicar paquetes"
+                            onClick={() => {
+                              const pend = pendingPackages[dateString] ?? { day: dayData.envios_day_packages, night: dayData.envios_night_packages };
+                              const d = Math.max(0, pend.day|0);
+                              const n = Math.max(0, pend.night|0);
+                              updatePackages(dateString, "day", d);
+                              updatePackages(dateString, "night", n);
+                            }}
+                          >Aplicar</Button>
+                        </div>
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
-            </table>
+              </table>
           </div>
 
           {/* Weekly Summary */}
