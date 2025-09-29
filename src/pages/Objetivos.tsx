@@ -87,29 +87,52 @@ export default function Objetivos() {
       console.warn("No se pudo leer mm_accessories", err);
     }
   }, []);
+  // Mantener sincronizado si cambia en otra pestaña o al volver del Dashboard
   useEffect(() => {
-    try {
-      // reflejar progreso de moto en financialData para unificar dashboard
-      const finRaw = localStorage.getItem("mm_financialData");
-      const fin = finRaw ? JSON.parse(finRaw) : {};
-      fin.motoGoal = fin.motoGoal || { target: MOTO_TARGET, current: 0 };
-      fin.motoGoal.target = MOTO_TARGET;
-      fin.motoGoal.current = motoCurrent;
-      localStorage.setItem("mm_financialData", JSON.stringify(fin));
-    } catch (err) {
-      console.warn("No se pudo guardar mm_financialData", err);
-    }
-  }, [motoCurrent]);
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'mm_financialData' && e.newValue) {
+        try {
+          const fin = JSON.parse(e.newValue);
+          if (fin?.motoGoal?.current != null) setMotoCurrent(fin.motoGoal.current);
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+  // Nota: ya NO escribimos en mm_financialData desde Objetivos para no desalinear con Dashboard
+  // Cargar accesorios desde API y dejar de usar localStorage
+  const API_BASE = ((import.meta as unknown as { env?: Record<string,string> }).env?.VITE_API_URL) || 'http://localhost:8081';
   useEffect(() => {
-    try { localStorage.setItem("mm_accessories", JSON.stringify(accessories)); } catch (err) {
-      console.warn("No se pudo guardar mm_accessories", err);
-    }
-  }, [accessories]);
+    const load = async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/accessories`);
+        if (r.ok) {
+          const data = await r.json();
+          if (Array.isArray(data)) setAccessories(data);
+        }
+      } catch (e) { console.warn('No se pudo cargar accesorios de la API', e); }
+    };
+    load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Detectar y traer datos de Mercado Libre por ID (MLA...)
   const extractMLId = (url: string) => {
-    const m = url.match(/(ML[A-Z]{1}\d{6,})/i);
-    return m ? m[1].toUpperCase() : undefined;
+    try {
+      const u = new URL(url);
+      // 1) Query param común
+      const qp = u.searchParams.get('matt_product_id') || u.searchParams.get('matt_product') || u.searchParams.get('product_id');
+      if (qp && /ML[A-Z]\d{6,}/i.test(qp)) return qp.toUpperCase();
+      // 2) En el path: .../MLA-#########_...
+      const path = u.pathname || '';
+      const m2 = path.match(/(ML[A-Z])(?:-|_)?(\d{6,})/i);
+      if (m2) return `${m2[1].toUpperCase()}${m2[2]}`;
+      // 3) Fallback global
+      const m3 = url.match(/(ML[A-Z])(?:-|_)?(\d{6,})/i);
+      if (m3) return `${m3[1].toUpperCase()}${m3[2]}`;
+    } catch (e) { console.warn('extractMLId error', e); }
+    return undefined;
   };
 
   const addFromUrl = async () => {
@@ -119,39 +142,93 @@ export default function Objetivos() {
     let accessory: Accessory = { id: Date.now().toString(), url, title: url };
     try {
       const id = extractMLId(url);
+      let filled = false;
       if (id) {
-        const res = await fetch(`https://api.mercadolibre.com/items/${id}`);
-        if (res.ok) {
-          const data = await res.json();
-          accessory = {
-            id: Date.now().toString(),
-            url,
-            title: data.title || url,
-            price: typeof data.price === 'number' ? data.price : undefined,
-            image: data.thumbnail || (data.pictures && data.pictures[0]?.url) || undefined,
-            description: (data.condition ? `Condición: ${data.condition}` : undefined),
-            bought: false,
-          };
-          // intentar descripción extendida
-          try {
-            const dres = await fetch(`https://api.mercadolibre.com/items/${id}/description`);
-            if (dres.ok) {
-              const d = await dres.json();
-              accessory.description = d.plain_text || accessory.description;
-            }
-          } catch (e) { console.warn('No se pudo leer descripción extendida ML', e); }
+        try {
+          // Usar backend propio para evitar CORS
+          const res = await fetch(`${API_BASE}/api/ml/item/${id}`);
+          if (res.ok) {
+            const data = await res.json();
+            accessory = {
+              id: Date.now().toString(),
+              url,
+              title: data.title || url,
+              price: typeof data.price === 'number' ? data.price : (typeof data.base_price === 'number' ? data.base_price : undefined),
+              image: (data.pictures && data.pictures[0]?.secure_url) || (data.pictures && data.pictures[0]?.url) || data.secure_thumbnail || data.thumbnail || undefined,
+              description: (data.condition ? `Condición: ${data.condition}` : undefined),
+              bought: false,
+            };
+            filled = true;
+          }
+        } catch (e) {
+          console.warn('Error consumiendo API de ML', e);
+        }
+      }
+
+      // Fallback: si la API falló o no trajo datos, scrapear meta tags via proxy (CORS safe)
+      if (!filled) {
+        try {
+          // Fallback sin CORS: leer HTML/plano de la página con Jina y extraer señales
+          const resp = await fetch(`https://r.jina.ai/http://${url.replace(/^https?:\/\//,'')}`);
+          if (resp.ok) {
+            const pageText = await resp.text();
+            // Título: primera línea relevante
+            const titleLine = (pageText.match(/^.*\S.*$/m) || [url])[0];
+            // Precio: primera coincidencia $ 123.456,78
+            const priceMatch = pageText.match(/\$\s*([0-9]{1,3}(?:[.,][0-9]{3})*(?:,[0-9]{2})?)/);
+            const price = priceMatch ? parseFloat(priceMatch[1].replace(/\./g,'').replace(/,/, '.')) : undefined;
+            // Imagen: intentamos capturar una URL de imagen común en el texto
+            const imgMatch = pageText.match(/https?:[^\s]*\.(?:jpg|jpeg|png|webp)/i);
+
+            accessory = {
+              id: Date.now().toString(),
+              url,
+              title: titleLine?.slice(0, 120) || url,
+              price: isNaN(price as number) ? undefined : price,
+              image: imgMatch ? imgMatch[0] : undefined,
+              bought: false,
+            };
+          }
+        } catch (e) {
+          console.warn('Fallback scrape Jina falló', e);
         }
       }
     } catch (err) {
       console.warn("No se pudo obtener datos del link", err);
     }
-    setAccessories((prev) => [accessory, ...prev]);
+    // Persistir en API y refrescar
+    try {
+      const r = await fetch(`${API_BASE}/api/accessories`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(accessory)
+      });
+      if (r.ok) {
+        const created = await r.json();
+        setAccessories((prev) => [created, ...prev]);
+      } else {
+        setAccessories((prev) => [accessory, ...prev]);
+      }
+    } catch {
+      setAccessories((prev) => [accessory, ...prev]);
+    }
     setNewUrl("");
     setAdding(false);
     setShowForm(false);
   };
 
   const overallProgress = useMemo(() => getProgressPercentage(motoCurrent, MOTO_TARGET), [motoCurrent]);
+  // Alinear con Dashboard: sumar ahorro adicional (préstamo) al progreso mostrado
+  const additionalSavings = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('mm_flex_settings');
+      if (!raw) return 0;
+      const parsed = JSON.parse(raw);
+      return typeof parsed?.additionalSavings === 'number' ? parsed.additionalSavings : 0;
+    } catch { return 0; }
+  }, []);
+  const displayMotoCurrent = motoCurrent + additionalSavings;
+  const displayProgress = useMemo(() => getProgressPercentage(displayMotoCurrent, MOTO_TARGET), [displayMotoCurrent]);
 
   return (
     <div className="space-y-6">
@@ -190,8 +267,8 @@ export default function Objetivos() {
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Moto - Ahorrado</p>
-                <p className="text-2xl font-bold text-income">{formatCurrency(motoCurrent)}</p>
+                <p className="text-sm text-muted-foreground">Moto - Ahorrado (incl. préstamo)</p>
+                <p className="text-2xl font-bold text-income">{formatCurrency(displayMotoCurrent)}</p>
               </div>
               <TrendingUp className="h-8 w-8 text-income" />
             </div>
@@ -203,10 +280,11 @@ export default function Objetivos() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Progreso General</p>
-                <p className="text-2xl font-bold text-goal">{overallProgress.toFixed(1)}%</p>
+                <p className="text-2xl font-bold text-goal">{displayProgress.toFixed(1)}%</p>
+                <p className="text-xs text-muted-foreground">{formatCurrency(displayMotoCurrent)} de {formatCurrency(MOTO_TARGET)}</p>
               </div>
               <div className="w-12 h-12 rounded-full bg-goal-light flex items-center justify-center">
-                <span className="text-goal font-bold text-sm">{Math.round(overallProgress)}%</span>
+                <span className="text-goal font-bold text-sm">{Math.round(displayProgress)}%</span>
               </div>
             </div>
           </CardContent>
@@ -221,7 +299,7 @@ export default function Objetivos() {
           </CardHeader>
           <CardContent>
             <form onSubmit={(e)=>{e.preventDefault(); addFromUrl();}} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2 md:col-span-2">
+              <div className="space-y-2">
                 <Label htmlFor="acc-url">Link (Mercado Libre)</Label>
                 <Input id="acc-url" placeholder="https://articulo.mercadolibre.com.ar/..." value={newUrl} onChange={(e)=>setNewUrl(e.target.value)} required />
               </div>
@@ -241,27 +319,18 @@ export default function Objetivos() {
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-lg">Moto Nueva</CardTitle>
-              <Badge variant={overallProgress >= 100 ? "default" : "outline"}>
-                {overallProgress >= 100 ? "Completado" : `${overallProgress.toFixed(1)}%`}
+              <Badge variant={displayProgress >= 100 ? "default" : "outline"}>
+                {displayProgress >= 100 ? "Completado" : `${displayProgress.toFixed(1)}%`}
               </Badge>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <div className="flex justify-between text-sm">
-                <span className="font-medium">{formatCurrency(motoCurrent)}</span>
+                <span className="font-medium">{formatCurrency(displayMotoCurrent)}</span>
                 <span className="text-muted-foreground">{formatCurrency(MOTO_TARGET)}</span>
               </div>
-              <Progress value={overallProgress} className="h-3" />
-            </div>
-            <div className="flex gap-2">
-              <Input
-                type="number"
-                placeholder="Sumar ahorro"
-                value={String(0)}
-                onChange={() => {}}
-                className="hidden"
-              />
+              <Progress value={displayProgress} className="h-3" />
             </div>
           </CardContent>
         </Card>
@@ -310,15 +379,24 @@ export default function Objetivos() {
                   )}
                   <div className="p-3 space-y-2">
                     <div className="font-semibold line-clamp-2">{a.title}</div>
-                    {typeof a.price === 'number' && <div className="text-primary font-bold">{formatCurrency(a.price)}</div>}
-                    {a.description && <div className="text-xs text-muted-foreground line-clamp-3">{a.description}</div>}
+                    {typeof a.price === 'number' && (
+                      <div className="text-primary font-bold">{formatCurrency(a.price)}</div>
+                    )}
+                    {a.description && (
+                      <div className="text-xs text-muted-foreground line-clamp-3">{a.description}</div>
+                    )}
                     <div className="flex items-center justify-between pt-1">
                       <a href={a.url} target="_blank" rel="noreferrer" className="text-primary inline-flex items-center gap-1 text-sm">
                         <LinkIcon className="h-4 w-4" /> Ver producto
                       </a>
-                      <Button size="sm" variant={a.bought ? 'secondary' : 'outline'} onClick={() => setAccessories(prev => prev.map(x => x.id === a.id ? { ...x, bought: !x.bought } : x))}>
-                        <Check className="h-4 w-4 mr-1" /> {a.bought ? 'Comprado' : 'Marcar comprado'}
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" variant={a.bought ? 'secondary' : 'outline'} onClick={() => setAccessories(prev => prev.map(x => x.id === a.id ? { ...x, bought: !x.bought } : x))}>
+                          <Check className="h-4 w-4 mr-1" /> {a.bought ? 'Comprado' : 'Marcar comprado'}
+                        </Button>
+                        <Button size="sm" variant="destructive" onClick={() => setAccessories(prev => prev.filter(x => x.id !== a.id))}>
+                          Eliminar
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </div>

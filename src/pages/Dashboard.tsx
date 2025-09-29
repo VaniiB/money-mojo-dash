@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, type SyntheticEvent, useRef } from "react";
+import { apiGet, apiPut } from "@/lib/api";
 import { DollarSign, TrendingUp, Target, Plus, Star } from "lucide-react";
 
 import ModernStatCard from "@/components/ModernStatCard";
@@ -142,27 +143,29 @@ export default function Dashboard() {
     minNightWeekday: 1,        // mínimo paquetes de Noche entre semana
   });
 
+  // Gastos desde API para cálculos de la semana
+  const [varExpensesAll, setVarExpensesAll] = useState<Array<{ date: string; amount: number }>>([]);
+  const [fixedExpensesAll, setFixedExpensesAll] = useState<Array<{ date: string; amount: number; paid?: boolean }>>([]);
+
+  // Cargar ajustes flex desde API y guardar cambios en API
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('mm_flex_settings');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        setSettings((prev) => ({
-          additionalSavings: typeof parsed.additionalSavings === 'number' ? parsed.additionalSavings : prev.additionalSavings,
-          nightWeightWeekday: typeof parsed.nightWeightWeekday === 'number' ? parsed.nightWeightWeekday : prev.nightWeightWeekday,
-          nightWeightWeekend: typeof parsed.nightWeightWeekend === 'number' ? parsed.nightWeightWeekend : prev.nightWeightWeekend,
-          weekendNightMin: typeof parsed.weekendNightMin === 'number' ? parsed.weekendNightMin : prev.weekendNightMin,
-          minDayAll: typeof parsed.minDayAll === 'number' ? parsed.minDayAll : prev.minDayAll,
-          minNightWeekday: typeof parsed.minNightWeekday === 'number' ? parsed.minNightWeekday : prev.minNightWeekday,
+    const load = async () => {
+      const data = await apiGet<any>(`/api/settings/flexSettings`);
+      if (data && typeof data === 'object') {
+        setSettings(prev => ({
+          additionalSavings: typeof data.additionalSavings === 'number' ? data.additionalSavings : prev.additionalSavings,
+          nightWeightWeekday: typeof data.nightWeightWeekday === 'number' ? data.nightWeightWeekday : prev.nightWeightWeekday,
+          nightWeightWeekend: typeof data.nightWeightWeekend === 'number' ? data.nightWeightWeekend : prev.nightWeightWeekend,
+          weekendNightMin: typeof data.weekendNightMin === 'number' ? data.weekendNightMin : prev.weekendNightMin,
+          minDayAll: typeof data.minDayAll === 'number' ? data.minDayAll : prev.minDayAll,
+          minNightWeekday: typeof data.minNightWeekday === 'number' ? data.minNightWeekday : prev.minNightWeekday,
         }));
       }
-    } catch (e) { console.warn('No se pudo leer mm_flex_settings', e); }
+    };
+    load();
   }, []);
-
   useEffect(() => {
-    try {
-      localStorage.setItem('mm_flex_settings', JSON.stringify(settings));
-    } catch (e) { console.warn('No se pudo guardar mm_flex_settings', e); }
+    apiPut(`/api/settings/flexSettings`, settings).catch(() => {});
   }, [settings]);
 
   // Cargar Google Places usando API Key desde variables de entorno (Vite: VITE_GOOGLE_API_KEY)
@@ -209,67 +212,59 @@ export default function Dashboard() {
     }
   };
 
-  // Cargar/salvar locales conocidos
+  // Cargar/salvar locales conocidos vía API
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('mm_known_locals');
-      if (raw) setKnownLocals(JSON.parse(raw));
-    } catch (e) { console.warn('No se pudo leer mm_known_locals', e); }
+    const load = async () => {
+      const docs = await apiGet<KnownLocal[]>(`/api/known-locals`);
+      if (Array.isArray(docs)) setKnownLocals(docs);
+    };
+    load();
   }, []);
   useEffect(() => {
-    try { localStorage.setItem('mm_known_locals', JSON.stringify(knownLocals)); } catch (e) { console.warn('No se pudo guardar mm_known_locals', e); }
+    // upsert cada local (simple; tamaño pequeño)
+    knownLocals.forEach(l => {
+      if (l?.name) apiPut(`/api/known-locals/${encodeURIComponent(l.name)}`, l).catch(() => {});
+    });
   }, [knownLocals]);
 
   // Mostrar opciones de una reserva al hacer click en el nombre (por chip)
   const [openResId, setOpenResId] = useState<string | null>(null);
 
-  // Persistencia en localStorage: cargar al montar
+  // Cargar datos principales desde la API
   useEffect(() => {
-    try {
-      const storedWeek = localStorage.getItem("mm_weekData");
-      const storedFin = localStorage.getItem("mm_financialData");
-      const storedWB = localStorage.getItem("mm_weeklyBilling");
-      if (storedWeek) {
-        const parsed = JSON.parse(storedWeek) as DayData[];
-        if (Array.isArray(parsed)) setWeekData(parsed);
-      }
-      if (storedFin) {
-        const parsed = JSON.parse(storedFin) as typeof initialFinancialData;
-        if (parsed && parsed.motoGoal) setFinancialData(parsed);
-      }
-      if (storedWB) {
-        const parsed = JSON.parse(storedWB) as Record<string, { vanina?: number; leonardo?: number; registeredSum?: number; registeredAt?: string }>;
-        if (parsed) setWeeklyBilling(parsed);
-      }
-    } catch (e) {
-      // ignore
-    }
-  }, []);
+    const monday = new Date(currentWeekStart);
+    const end = new Date(monday); end.setDate(monday.getDate() + 6);
+    const startStr = monday.toISOString().slice(0,10);
+    const endStr = end.toISOString().slice(0,10);
+    const load = async () => {
+      const fin = await apiGet<typeof initialFinancialData>(`/api/settings/financialData`);
+      if (fin && fin.motoGoal) setFinancialData(fin);
+      const days = await apiGet<DayData[]>(`/api/week-data?start=${encodeURIComponent(startStr)}&end=${encodeURIComponent(endStr)}`);
+      if (Array.isArray(days)) setWeekData(days);
+      const wb = await apiGet<Record<string, { vanina?: number; leonardo?: number; registeredSum?: number; registeredAt?: string }>>(`/api/weekly-billing/${encodeURIComponent(startStr)}`);
+      if (wb) setWeeklyBilling(prev => ({ ...prev, [startStr]: wb as any }));
+      const v = await apiGet<Array<{ date: string; amount: number }>>(`/api/expenses/variable`);
+      if (Array.isArray(v)) setVarExpensesAll(v);
+      const f = await apiGet<Array<{ date: string; amount: number; paid?: boolean }>>(`/api/expenses/fixed`);
+      if (Array.isArray(f)) setFixedExpensesAll(f);
+    };
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentWeekStart]);
 
-  // Guardar cada vez que cambian
+  // Guardar en API cuando cambian estructuras principales
   useEffect(() => {
-    try {
-      localStorage.setItem("mm_weekData", JSON.stringify(weekData));
-    } catch (err) {
-      console.warn("No se pudo guardar weekData en localStorage", err);
-    }
+    // upsert por día modificado
+    weekData.forEach(day => { if (day?.date) apiPut(`/api/week-data/${encodeURIComponent(day.date)}`, day).catch(() => {}); });
   }, [weekData]);
-
   useEffect(() => {
-    try {
-      localStorage.setItem("mm_financialData", JSON.stringify(financialData));
-    } catch (err) {
-      console.warn("No se pudo guardar financialData en localStorage", err);
-    }
+    apiPut(`/api/settings/financialData`, financialData).catch(() => {});
   }, [financialData]);
-
   useEffect(() => {
-    try {
-      localStorage.setItem("mm_weeklyBilling", JSON.stringify(weeklyBilling));
-    } catch (err) {
-      console.warn("No se pudo guardar weeklyBilling en localStorage", err);
-    }
-  }, [weeklyBilling]);
+    // Guardar billing de la semana actual si existe clave
+    const key = new Date(currentWeekStart).toISOString().slice(0,10);
+    if (weeklyBilling[key]) apiPut(`/api/weekly-billing/${encodeURIComponent(key)}`, { ...weeklyBilling[key], weekKey: key }).catch(() => {});
+  }, [weeklyBilling, currentWeekStart]);
 
   const getWeekString = () => {
     const monday = new Date(currentWeekStart);
@@ -316,31 +311,17 @@ export default function Dashboard() {
       tipsTotal += (dayData.tip_day || 0) + (dayData.tip_night || 0);
     }
 
-    // Gastos variables de la semana
-    let varExpenses = 0;
-    try {
-      const raw = localStorage.getItem("mm_variable_expenses");
-      if (raw) {
-        const arr = JSON.parse(raw) as Array<{ date: string; amount: number }>;
-        varExpenses = arr.filter(e => {
-          const d = new Date(e.date);
-          return d >= start && d <= end;
-        }).reduce((s, e) => s + (e.amount || 0), 0);
-      }
-    } catch (e) { console.warn("No se pudo leer mm_variable_expenses", e); }
+    // Gastos variables de la semana desde API cargada
+    const varExpenses = varExpensesAll.filter(e => {
+      const d = new Date(e.date);
+      return d >= start && d <= end;
+    }).reduce((s, e) => s + (e.amount || 0), 0);
 
-    // Gastos fijos (solo pagados) de la semana
-    let fixedExpenses = 0;
-    try {
-      const raw = localStorage.getItem("mm_fixed_expenses");
-      if (raw) {
-        const arr = JSON.parse(raw) as Array<{ date: string; amount: number; paid: boolean }>;
-        fixedExpenses = arr.filter(e => e.paid).filter(e => {
-          const d = new Date(e.date);
-          return d >= start && d <= end;
-        }).reduce((s, e) => s + (e.amount || 0), 0);
-      }
-    } catch (e) { console.warn("No se pudo leer mm_fixed_expenses", e); }
+    // Gastos fijos (solo pagados) de la semana desde API cargada
+    const fixedExpenses = fixedExpensesAll.filter(e => e.paid).filter(e => {
+      const d = new Date(e.date);
+      return d >= start && d <= end;
+    }).reduce((s, e) => s + (e.amount || 0), 0);
 
     const incomeTotal = cobradas + enviosTotal + tipsTotal;
     const expensesTotal = varExpenses + fixedExpenses;
@@ -732,6 +713,17 @@ export default function Dashboard() {
             <p className="text-xs text-muted-foreground">Al marcar como cobrado, se suma automáticamente al Panel de Finanzas y la próxima semana comenzará a trackearse.</p>
           </CardContent>
         </Card>
+      </div>
+
+      {/* Figura decorativa (solo modo oscuro) */}
+      <div className="hidden dark:block">
+        <div className="fixed right-8 bottom-8 pointer-events-none select-none z-10">
+          <img
+            src={`${(import.meta as unknown as { env?: Record<string,string> }).env?.BASE_URL ?? '/'}publicdepresion-figure.png.png`}
+            alt="Decoración Depresión contable"
+            className="opacity-95 w-[200px] h-[200px]"
+          />
+        </div>
       </div>
 
       {/* Weekly Turnos Table - MAIN FOCUS */}

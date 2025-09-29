@@ -1,14 +1,5 @@
 import { useState, useEffect } from "react";
-// PDF parsing (static import) – usamos build legacy para compatibilidad amplia
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore - tipos de pdfjs-dist pueden variar según versión
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf";
-
 import { Plus, TrendingDown, ShoppingCart, Car, Utensils, Home, Heart, Zap, MoreHorizontal } from "lucide-react";
-// OCR fallback para PDFs escaneados
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
-import Tesseract from "tesseract.js";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -79,6 +70,23 @@ export default function Gastos() {
     fileName: ""
   });
   const [autoFillNote, setAutoFillNote] = useState<string>("");
+  const focusFirstMissing = () => {
+    if (!fixedForm.provider) {
+      const el = document.getElementById('fixed-provider') as HTMLInputElement | null;
+      el?.focus();
+      return;
+    }
+    if (!fixedForm.amount) {
+      const el = document.getElementById('fixed-amount') as HTMLInputElement | null;
+      el?.focus();
+      return;
+    }
+    if (!fixedForm.dueDate) {
+      const el = document.getElementById('fixed-dueDate') as HTMLInputElement | null;
+      el?.focus();
+      return;
+    }
+  };
 
   // Persistencia
   useEffect(() => {
@@ -112,70 +120,33 @@ export default function Gastos() {
     }).format(amount);
   };
 
-  // Configurar worker de pdfjs desde CDN (evita problemas de resolución locales)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (pdfjsLib as any).GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+  // API base (backend Express)
+  const API_BASE = ((import.meta as unknown as { env?: Record<string,string> }).env?.VITE_API_URL) || 'http://localhost:8081';
 
-  type PdfTextItem = { str?: string };
-  type PdfJsPage = { getTextContent: () => Promise<{ items: PdfTextItem[] }> };
-  type PdfJsDoc = { numPages: number; getPage: (n: number) => Promise<PdfJsPage> };
-  const parsePdfAndAutofill = async (file: File) => {
-    try {
-      setAutoFillNote("Leyendo factura...");
-      const buf = await file.arrayBuffer();
-      const loadingTask = (pdfjsLib as unknown as { getDocument: (opts: { data: ArrayBuffer }) => { promise: Promise<PdfJsDoc> } }).getDocument({ data: buf });
-      const pdf = await loadingTask.promise;
-      let text = "";
-      const pages = Math.min(pdf.numPages, 3);
-      for (let i = 1; i <= pages; i++) {
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        const items = content.items || [];
-        text += items.map((it) => it.str || "").join(" ") + "\n";
-      }
-      // OCR fallback si el texto es muy corto (PDF escaneado)
-      if (!text || text.trim().length < 20) {
-        setAutoFillNote("Leyendo factura... (OCR)");
-        const page = await pdf.getPage(1);
-        const viewport = (page as any).getViewport({ scale: 2 });
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        await (page as any).render({ canvasContext: ctx, viewport }).promise;
-        const { data } = await Tesseract.recognize(canvas, 'spa');
-        if (data && data.text) {
-          text = data.text;
+  // Cargar gastos fijos desde API al montar
+  useEffect(() => {
+    const loadFixed = async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/expenses/fixed`);
+        if (r.ok) {
+          const data = await r.json();
+          if (Array.isArray(data)) setFixedExpenses(data);
         }
+      } catch (e) {
+        console.warn('No se pudo cargar gastos fijos desde la API', e);
       }
-      const lower = text.toLowerCase();
-      // proveedor: tomar primera palabra fuerte conocida o fallback por nombre archivo
-      const providers = ["edesur", "edenor", "metrogas", "telecom", "fibertel", "personal", "claro", "movistar", "speedy", "garage", "cochera", "aysa", "internet", "gas", "luz"];
-      let provider = providers.find(p => lower.includes(p)) || file.name.replace(/\.pdf$/i, "");
-      provider = provider.charAt(0).toUpperCase() + provider.slice(1);
-      // tipo por heurística
-      const type = detectFixedType(provider + " " + lower);
-      // monto: buscar el número más grande con formato
-      const amountMatches = Array.from(text.matchAll(/\$?\s*([0-9]{1,3}(?:[.,][0-9]{3})*(?:[.,][0-9]{2})?)/g))
-        .map(m => (m[1] || "").replace(/\./g, "").replace(/,/, "."))
-        .map(s => parseFloat(s))
-        .filter(n => !isNaN(n));
-      const amount = amountMatches.length ? Math.max(...amountMatches) : 0;
-      // fecha de vencimiento dd/mm/yyyy
-      const dateMatch = text.match(/(venc(?:imiento)?|vto\.?|vence)[:\s-]*?(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i);
-      const dueDate = dateMatch ? dateMatch[2].replace(/-/g, "/").split("/").map((v, i) => (i === 2 && v.length === 2 ? `20${v}` : v)).join("-") : "";
+    };
+    loadFixed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-      setFixedForm(ff => ({
-        ...ff,
-        provider: ff.provider || provider,
-        amount: ff.amount || (amount ? String(Math.round(amount)) : ""),
-        dueDate: ff.dueDate || (dueDate || ""),
-        fileName: file.name
-      }));
-      setAutoFillNote("Factura leída y campos completados automáticamente. Revisá antes de subir.");
+  // Modo manual: solo adjuntar PDF (sin OCR)
+  const loadInvoicePdf = async (file: File) => {
+    try {
+      setFixedForm(ff => ({ ...ff, fileName: file.name }));
+      setAutoFillNote("");
     } catch (err) {
-      console.warn("No se pudo leer el PDF, usando heurística básica", err);
-      setAutoFillNote("No se pudo leer el PDF. Completá o corregí los campos manualmente.");
+      console.warn("No se pudo adjuntar el PDF", err);
     }
   };
 
@@ -242,31 +213,39 @@ export default function Gastos() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
             <div className="space-y-1">
               <Label>Proveedor</Label>
-              <Input placeholder="Edesur / Metrogas / Personal..." value={fixedForm.provider} onChange={(e) => setFixedForm({...fixedForm, provider: e.target.value})} />
+              <Input id="fixed-provider" placeholder="Edesur / Metrogas / Personal..." value={fixedForm.provider} onChange={(e) => setFixedForm({...fixedForm, provider: e.target.value})} />
             </div>
             <div className="space-y-1">
               <Label>Monto</Label>
-              <Input type="number" placeholder="0" value={fixedForm.amount} onChange={(e) => setFixedForm({...fixedForm, amount: e.target.value})} />
+              <Input id="fixed-amount" type="number" placeholder="0" value={fixedForm.amount} onChange={(e) => setFixedForm({...fixedForm, amount: e.target.value})} />
             </div>
             <div className="space-y-1">
               <Label>Vence</Label>
-              <Input type="date" value={fixedForm.dueDate} onChange={(e) => setFixedForm({...fixedForm, dueDate: e.target.value})} />
+              <Input id="fixed-dueDate" type="date" value={fixedForm.dueDate} onChange={(e) => setFixedForm({...fixedForm, dueDate: e.target.value})} />
             </div>
             <div className="space-y-1">
               <Label>Factura (PDF)</Label>
               <Input type="file" accept="application/pdf" onChange={async (e) => {
                 const f = e.target.files?.[0];
                 if (!f) return;
-                setFixedForm({ ...fixedForm, fileName: f.name });
-                await parsePdfAndAutofill(f);
+                await loadInvoicePdf(f);
               }} />
             </div>
           </div>
-          {autoFillNote && <div className="text-xs text-muted-foreground">{autoFillNote}</div>}
+          {autoFillNote && (
+            <div className="text-xs text-muted-foreground flex items-center gap-2">
+              <span>{autoFillNote}</span>
+              {(!fixedForm.provider || !fixedForm.amount || !fixedForm.dueDate) && (
+                <Button type="button" variant="ghost" size="sm" onClick={focusFirstMissing}>
+                  Completar campos
+                </Button>
+              )}
+            </div>
+          )}
           <div className="flex justify-end">
             <Button
               variant="outline"
-              onClick={() => {
+              onClick={async () => {
                 const amount = parseFloat(fixedForm.amount || "0");
                 if (!fixedForm.provider || !amount) return;
                 const base = fixedForm.provider || fixedForm.fileName;
@@ -280,7 +259,22 @@ export default function Gastos() {
                   paid: false,
                   fileName: fixedForm.fileName || undefined
                 };
-                setFixedExpenses(prev => [item, ...prev]);
+                try {
+                  const r = await fetch(`${API_BASE}/api/expenses/fixed`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(item)
+                  });
+                  if (r.ok) {
+                    const created = await r.json();
+                    setFixedExpenses(prev => [created, ...prev]);
+                  } else {
+                    setFixedExpenses(prev => [item, ...prev]);
+                  }
+                } catch (e) {
+                  console.warn('No se pudo guardar en la API, usando estado local', e);
+                  setFixedExpenses(prev => [item, ...prev]);
+                }
                 setFixedForm({ provider: "", amount: "", dueDate: "", fileName: "" });
               }}
             >
@@ -301,6 +295,7 @@ export default function Gastos() {
                   <th className="p-2 text-left">Proveedor</th>
                   <th className="p-2 text-right">Monto</th>
                   <th className="p-2 text-left">Vence</th>
+                  <th className="p-2 text-left">Adjunto</th>
                   <th className="p-2 text-center">Estado</th>
                 </tr>
               </thead>
@@ -312,9 +307,26 @@ export default function Gastos() {
                     <td className="p-2">{fx.provider}{fx.fileName ? ` (${fx.fileName})` : ""}</td>
                     <td className="p-2 text-right">{new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", minimumFractionDigits: 0 }).format(fx.amount)}</td>
                     <td className="p-2">{fx.dueDate || '-'}</td>
+                    <td className="p-2">{fx.fileName ? fx.fileName : '-'}</td>
                     <td className="p-2 text-center">
-                      <Button size="sm" variant={fx.paid ? 'secondary' : 'outline'} onClick={() => {
-                        setFixedExpenses(prev => prev.map(e => e.id === fx.id ? { ...e, paid: !e.paid } : e));
+                      <Button size="sm" variant={fx.paid ? 'secondary' : 'outline'} onClick={async () => {
+                        const updated = { ...fx, paid: !fx.paid };
+                        try {
+                          const r = await fetch(`${API_BASE}/api/expenses/fixed/${fx.id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(updated)
+                          });
+                          if (r.ok) {
+                            const saved = await r.json();
+                            setFixedExpenses(prev => prev.map(e => e.id === fx.id ? saved : e));
+                          } else {
+                            setFixedExpenses(prev => prev.map(e => e.id === fx.id ? updated : e));
+                          }
+                        } catch (e) {
+                          console.warn('No se pudo actualizar en la API, usando estado local', e);
+                          setFixedExpenses(prev => prev.map(e => e.id === fx.id ? updated : e));
+                        }
                         if (!fx.paid) {
                           discountFromSavings(fx.amount);
                         }
