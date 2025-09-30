@@ -14,7 +14,20 @@ if (!MONGODB_URI) {
   process.exit(1);
 }
 
-app.use(cors({ origin: CORS_ORIGIN, credentials: false }));
+// Soportar múltiples orígenes (CSV) y preflight
+const allowedOrigins = CORS_ORIGIN.split(',').map(s => s.trim()).filter(Boolean);
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    // Permitir herramientas sin origen (curl, health checks)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.length === 0) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error(`CORS blocked for origin ${origin}`));
+  },
+  credentials: false,
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 
 // DB connect
@@ -45,7 +58,10 @@ app.use('/api/accessories', accessoriesRouter);
 app.use('/api/known-locals', knownLocalsRouter);
 app.use('/api/ml', mlRouter);
 
-app.get('/api/health', (_req: Request, res: Response) => res.json({ ok: true }));
+app.get('/api/health', (_req: Request, res: Response) => {
+  const state = mongoose.connection.readyState; // 0=disconnected,1=connected,2=connecting,3=disconnecting
+  res.json({ ok: true, db: { readyState: state } });
+});
 
 app.listen(PORT, () => {
   console.log(`Pobrify API running at http://localhost:${PORT}`);
