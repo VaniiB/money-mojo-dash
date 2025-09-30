@@ -100,7 +100,7 @@ export default function Dashboard() {
     shift: "dia" as "dia" | "noche"
   });
   // Edición por fila: paquetes pendientes a aplicar
-  const [pendingPackages, setPendingPackages] = useState<Record<string, { day: number; night: number }>>({});
+  const [pendingPackages, setPendingPackages] = useState<Record<string, { day: number; night: number; diaHecho?: number; nocheHecho?: number }>>({});
   // Base de locales conocidos (para sugerencias y logos)
   const [knownLocals, setKnownLocals] = useState<KnownLocal[]>([]);
   // Edición del local (cuando abrís un chip)
@@ -801,106 +801,55 @@ export default function Dashboard() {
           </div>
         </CardHeader>
         <CardContent className="px-6">
-          {/* Pre-cálculo secuencial con acarreo de faltantes (desde mañana hasta 05/10) */}
+          {/* Pre-cálculo con faltante fijo semanal (mar-dom, finde +50%, 50/50 turnos) - INCLUYE MARTES */}
           {(() => {
             try {
-              const goalDate = new Date(2025, 9, 5);
-              const today0 = new Date(); today0.setHours(0, 0, 0, 0);
-              const tomorrow0 = new Date(today0); tomorrow0.setDate(tomorrow0.getDate() + 1);
-              const msDay = 1000 * 60 * 60 * 24;
-              // Armar lista de fechas desde HOY hasta 05/10 (martes a domingo)
+              // Semana actual: martes a domingo (6 días) - INCLUYE MARTES
+              const monday = new Date(currentWeekStart);
               const dates: string[] = [];
-              for (let d = new Date(today0); d <= goalDate; d.setDate(d.getDate() + 1)) {
-                const dayOfWeek = d.getDay();
-                // Solo incluir días de trabajo: martes(2), miércoles(3), jueves(4), viernes(5), sábado(6), domingo(0)
-                if (dayOfWeek === 2 || dayOfWeek === 3 || dayOfWeek === 4 || dayOfWeek === 5 || dayOfWeek === 6 || dayOfWeek === 0) {
-                  dates.push(d.toISOString().split('T')[0]);
-                }
+              for (let i = 1; i <= 6; i++) { // 1=Martes ... 6=Domingo
+                const d = new Date(monday);
+                d.setDate(monday.getDate() + i);
+                dates.push(d.toISOString().split('T')[0]);
               }
-              // Calcular faltante global
-              const currentTotal = financialData.currentSavings + settings.additionalSavings;
-              let totalFutureReservations = 0;
-              let totalFuturePackages = 0;
-              dates.forEach(ds => {
-                const dd = weekData.find(w => w.date === ds) || { date: ds, reservations: [], envios_day_packages: 0, envios_night_packages: 0 };
-                totalFutureReservations += dd.reservations.reduce((s, r) => s + r.amount, 0);
-                totalFuturePackages += (dd.envios_day_packages * ENVIO_RATES.day) + (dd.envios_night_packages * ENVIO_RATES.night);
-              });
 
-              // Calcular dinero faltante para el objetivo de la moto
-              const motoRemaining = Math.max(0, 2050000 - financialData.motoGoal.current);
-              const perDayValue = dates.length > 0 ? Math.ceil(motoRemaining / dates.length) : 0;
+              // Faltante fijo: $740.000, más carga en vie/sáb/dom (+50%)
+              const weekendMultiplierOf = (dow: number) => (dow === 5 || dow === 6 || dow === 0 ? 1.5 : 1);
+              let totalWeight = 0;
+              dates.forEach(ds => { const d = new Date(ds); totalWeight += weekendMultiplierOf(d.getDay()); });
+              const basePerWeightUnit = totalWeight > 0 ? 740000 / totalWeight : 0;
 
-              // Calcular acarreo desde HOY (si hoy no cumplió su objetivo por turno)
-              const todayStr = today0.toISOString().split('T')[0];
-              const todayData = weekData.find(w => w.date === todayStr) || { date: todayStr, reservations: [], envios_day_packages: 0, envios_night_packages: 0 };
-              const dowToday = today0.getDay();
-              const isWeekendToday = (dowToday === 5 || dowToday === 6 || dowToday === 0);
-              const nightWeightToday = (isWeekendToday ? settings.nightWeightWeekend : settings.nightWeightWeekday) / 100;
-              const dayWeightToday = Math.max(0, 1 - nightWeightToday);
-              const dayTargetToday = perDayValue * dayWeightToday;
-              const nightTargetToday = perDayValue * nightWeightToday;
-              const resDayToday = todayData.reservations.filter(r => r.shift === 'dia').reduce((s, r) => s + r.amount, 0);
-              const resNightToday = todayData.reservations.filter(r => r.shift === 'noche').reduce((s, r) => s + r.amount, 0);
-              const dayAfterResToday = Math.max(0, dayTargetToday - resDayToday);
-              const nightAfterResToday = Math.max(0, nightTargetToday - resNightToday);
-              const dayAfterDoneToday = Math.max(0, dayAfterResToday - (todayData.envios_day_packages * ENVIO_RATES.day));
-              const nightAfterDoneToday = Math.max(0, nightAfterResToday - (todayData.envios_night_packages * ENVIO_RATES.night));
-              const ceilDiv = (val: number, rate: number) => Math.max(0, Math.floor((val + rate - 1) / rate));
-              let carryDayPacks = ceilDiv(dayAfterDoneToday, ENVIO_RATES.day);
-              let carryNightPacks = ceilDiv(nightAfterDoneToday, ENVIO_RATES.night);
-              // aplicar mínimos al acarreo también
-              carryDayPacks = Math.max(0, carryDayPacks);
-              carryNightPacks = Math.max(0, carryNightPacks);
               const plan: Record<string, { dayLeft: number; nightLeft: number }> = {};
-              dates.forEach((ds, idx) => {
+              dates.forEach(ds => {
                 const d = new Date(ds);
                 const dd = weekData.find(w => w.date === ds) || { date: ds, reservations: [], envios_day_packages: 0, envios_night_packages: 0 };
+
+                // $ ya hecho por turno (reservas + envíos)
                 const resDay = dd.reservations.filter(r => r.shift === 'dia').reduce((s, r) => s + r.amount, 0);
                 const resNight = dd.reservations.filter(r => r.shift === 'noche').reduce((s, r) => s + r.amount, 0);
-                const dow = d.getDay();
-                const isWeekend = (dow === 5 || dow === 6 || dow === 0); // viernes, sábado, domingo
-                const nightWeight = (isWeekend ? settings.nightWeightWeekend : settings.nightWeightWeekday) / 100;
-                const dayWeight = Math.max(0, 1 - nightWeight);
 
-                // Calcular dinero faltante por turno basado en el objetivo de la moto
-                // Aplicar más carga en fin de semana (viernes, sábado, domingo)
-                const weekendMultiplier = isWeekend ? 1.5 : 1; // 50% más en fin de semana
+                // Peso del día y objetivo diario
+                const mult = weekendMultiplierOf(d.getDay());
+                const dayTargetValue = (basePerWeightUnit * mult) * 0.5;
+                const nightTargetValue = (basePerWeightUnit * mult) * 0.5;
 
-                const dayTargetValue = basePerDayValue * dayWeight * weekendMultiplier;
-                const nightTargetValue = basePerDayValue * nightWeight * weekendMultiplier;
+                // Usar valores editables para calcular lo que falta
+                const diaHechoEditable = pendingPackages[ds]?.diaHecho ?? (dd.envios_day_packages * ENVIO_RATES.day);
+                const nocheHechoEditable = pendingPackages[ds]?.nocheHecho ?? (dd.envios_night_packages * ENVIO_RATES.night);
+                const dayEarned = resDay + diaHechoEditable;
+                const nightEarned = resNight + nocheHechoEditable;
+                let dayRemaining = Math.max(0, dayTargetValue - dayEarned);
+                let nightRemaining = Math.max(0, nightTargetValue - nightEarned);
 
-                // Calcular cuánto ya se juntó en este día (reservas + envíos)
-                const dayEarned = resDay + (dd.envios_day_packages * ENVIO_RATES.day);
-                const nightEarned = resNight + (dd.envios_night_packages * ENVIO_RATES.night);
-                const totalEarned = dayEarned + nightEarned;
+                // Rebalanceo si un turno no tiene reservas
+                const totalRemain = dayRemaining + nightRemaining;
+                if (resDay === 0 && resNight > 0) { dayRemaining = totalRemain * 0.7; nightRemaining = totalRemain * 0.3; }
+                else if (resNight === 0 && resDay > 0) { dayRemaining = totalRemain * 0.3; nightRemaining = totalRemain * 0.7; }
+                else if (resDay === 0 && resNight === 0) { dayRemaining = totalRemain * 0.5; nightRemaining = totalRemain * 0.5; }
 
-                // Calcular cuánto falta para el objetivo diario
-                const dayRemaining = Math.max(0, dayTargetValue - dayEarned);
-                const nightRemaining = Math.max(0, nightTargetValue - nightEarned);
-
-                // Si un turno no tiene reservas, el otro debe compensar (70% vs 30%)
-                const totalNeeded = dayRemaining + nightRemaining;
-                let finalDayTarget = dayRemaining;
-                let finalNightTarget = nightRemaining;
-
-                if (resDay === 0 && resNight > 0) {
-                  // Solo noche tiene reservas, día debe hacer 70%
-                  finalDayTarget = totalNeeded * 0.7;
-                  finalNightTarget = totalNeeded * 0.3;
-                } else if (resNight === 0 && resDay > 0) {
-                  // Solo día tiene reservas, noche debe hacer 70%
-                  finalDayTarget = totalNeeded * 0.3;
-                  finalNightTarget = totalNeeded * 0.7;
-                } else if (resDay === 0 && resNight === 0) {
-                  // Ninguno tiene reservas, distribución 50/50
-                  finalDayTarget = totalNeeded * 0.5;
-                  finalNightTarget = totalNeeded * 0.5;
-                }
-
-                // Convertir a paquetes para mostrar (pero el cálculo principal es en dinero)
-                const dayLeft = Math.max(0, Math.ceil(finalDayTarget / ENVIO_RATES.day));
-                const nightLeft = Math.max(0, Math.ceil(finalNightTarget / ENVIO_RATES.night));
+                // Pasar a "paquetes" para mostrar $ a hacer
+                const dayLeft = Math.max(0, Math.ceil(dayRemaining / ENVIO_RATES.day));
+                const nightLeft = Math.max(0, Math.ceil(nightRemaining / ENVIO_RATES.night));
 
                 plan[ds] = { dayLeft, nightLeft };
               });
@@ -931,8 +880,8 @@ export default function Dashboard() {
                   <th className="text-left p-2 font-medium text-muted-foreground whitespace-nowrap">Reservas</th>
                   <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">Cobr.</th>
                   <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">A Cob.</th>
-                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">PaqD</th>
-                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">PaqN</th>
+                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">$ Día hecho</th>
+                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">$ Noche hecho</th>
                   <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">$ Día a hacer</th>
                   <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">$ Noche a hacer</th>
                   <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">Env.</th>
@@ -954,13 +903,25 @@ export default function Dashboard() {
                     const reservasDiaTotal = cobradas + aCobrar;
                     const total = reservasDiaTotal + envios;
 
+                    // $ hecho por turno = valores editables (pueden ser diferentes a los paquetes)
+                    const diaHecho = dayData.envios_day_packages * ENVIO_RATES.day;
+                    const nocheHecho = dayData.envios_night_packages * ENVIO_RATES.night;
+                    const diaHechoEditable = pendingPackages[dateString]?.diaHecho ?? diaHecho;
+                    const nocheHechoEditable = pendingPackages[dateString]?.nocheHecho ?? nocheHecho;
+
+                    // Para el cálculo de "$ a hacer", usamos reservas + $ hecho editable
+                    const reservasDia = dayData.reservations.filter(r => r.shift === 'dia').reduce((s, r) => s + r.amount, 0);
+                    const reservasNoche = dayData.reservations.filter(r => r.shift === 'noche').reduce((s, r) => s + r.amount, 0);
+                    const diaTotal = reservasDia + diaHechoEditable;
+                    const nocheTotal = reservasNoche + nocheHechoEditable;
+
                     // Cálculo de paquetes a hacer por turno (usa dailyTargets guardados)
                     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
                     const thisDate = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate());
-                    const isPastOrToday = thisDate.getTime() <= todayStart.getTime();
+                    const isPast = thisDate.getTime() < todayStart.getTime();
                     const ds = dateString;
                     const p = (window as unknown as { __mm_planByDate?: Record<string, { dayLeft: number; nightLeft: number }> }).__mm_planByDate;
-                    const computed = (!isPastOrToday && p) ? p[ds] : undefined;
+                    const computed = (!isPast && p) ? p[ds] : undefined;
                     const dayLeft = computed?.dayLeft ?? 0;
                     const nightLeft = computed?.nightLeft ?? 0;
 
@@ -1137,23 +1098,25 @@ export default function Dashboard() {
                         <td className="p-2 text-center">
                           <Input
                             type="number"
-                            value={(pendingPackages[dateString]?.day ?? dayData.envios_day_packages)}
+                            value={(pendingPackages[dateString]?.diaHecho ?? diaHecho)}
                             onChange={(e) => {
-                              const v = Math.max(0, parseInt(e.target.value) || 0);
-                              setPendingPackages(prev => ({ ...prev, [dateString]: { day: v, night: (prev[dateString]?.night ?? dayData.envios_night_packages) } }));
+                              const v = Math.max(0, parseFloat(e.target.value) || 0);
+                              setPendingPackages(prev => ({ ...prev, [dateString]: { ...prev[dateString], diaHecho: v } }));
                             }}
-                            className="w-14 h-8 text-center text-xs"
+                            className="w-20 h-8 text-center text-xs"
+                            placeholder="0"
                           />
                         </td>
                         <td className="p-2 text-center">
                           <Input
                             type="number"
-                            value={(pendingPackages[dateString]?.night ?? dayData.envios_night_packages)}
+                            value={(pendingPackages[dateString]?.nocheHecho ?? nocheHecho)}
                             onChange={(e) => {
-                              const v = Math.max(0, parseInt(e.target.value) || 0);
-                              setPendingPackages(prev => ({ ...prev, [dateString]: { day: (prev[dateString]?.day ?? dayData.envios_day_packages), night: v } }));
+                              const v = Math.max(0, parseFloat(e.target.value) || 0);
+                              setPendingPackages(prev => ({ ...prev, [dateString]: { ...prev[dateString], nocheHecho: v } }));
                             }}
-                            className="w-14 h-8 text-center text-xs"
+                            className="w-20 h-8 text-center text-xs"
+                            placeholder="0"
                           />
                         </td>
                         <td className="p-2 text-center font-semibold">{formatCurrency(dayLeft * ENVIO_RATES.day)}</td>
@@ -1169,14 +1132,19 @@ export default function Dashboard() {
                             <Button size="icon" variant="outline" className="h-7 w-7" title="Agregar reserva" onClick={() => setShowNewReservation(dateString)}>
                               <Plus className="h-4 w-4" />
                             </Button>
-                            <Button size="sm" variant="secondary" title="Aplicar paquetes"
+                            <Button size="sm" variant="secondary" className="h-6 text-xs" title="Aplicar cambios"
                               onClick={() => {
-                                const pend = pendingPackages[dateString] ?? { day: dayData.envios_day_packages, night: dayData.envios_night_packages };
-                                const d = Math.max(0, pend.day | 0);
-                                const n = Math.max(0, pend.night | 0);
-                                updatePackages(dateString, "day", d);
-                                updatePackages(dateString, "night", n);
-                                setPendingPackages(prev => ({ ...prev, [dateString]: { day: d, night: n } }));
+                                // Guardar valores editables en el estado permanente
+                                const currentDiaHecho = pendingPackages[dateString]?.diaHecho ?? diaHecho;
+                                const currentNocheHecho = pendingPackages[dateString]?.nocheHecho ?? nocheHecho;
+                                setPendingPackages(prev => ({
+                                  ...prev,
+                                  [dateString]: {
+                                    ...prev[dateString],
+                                    diaHecho: currentDiaHecho,
+                                    nocheHecho: currentNocheHecho
+                                  }
+                                }));
                               }}
                             >Aplicar</Button>
                           </div>
@@ -1222,7 +1190,7 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="mt-2 text-xs text-muted-foreground">
-                Objetivo: {formatCurrency(2050000)} | Actual: {formatCurrency(totalCurrent)} (Ahorro: {formatCurrency(financialData.currentSavings)} + Moto: {formatCurrency(financialData.motoGoal.current)}) | Días de trabajo restantes: {workdaysWeight.toFixed(1)} (martes-dom, fin de semana +50% carga)
+                Objetivo: {formatCurrency(2050000)} | Actual: {formatCurrency(totalCurrent)} (Ahorro: {formatCurrency(financialData.currentSavings)}) | Días de trabajo restantes: {workdaysWeight.toFixed(1)} (martes-dom, fin de semana +50% carga)
               </div>
             </div>
           </div>
