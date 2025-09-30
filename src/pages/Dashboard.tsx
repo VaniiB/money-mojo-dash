@@ -78,6 +78,8 @@ const ENVIO_RATES = {
 export default function Dashboard() {
   const [weekData, setWeekData] = useState<DayData[]>(mockWeekData);
   const [financialData, setFinancialData] = useState(initialFinancialData);
+  // Flags para evitar sobrescribir la DB al cargar por primera vez
+  const [loaded, setLoaded] = useState<{ flex:boolean; known:boolean; week:boolean; financial:boolean; billing:boolean }>({ flex:false, known:false, week:false, financial:false, billing:false });
   const [currentWeekStart, setCurrentWeekStart] = useState(() => {
     const today = new Date();
     const monday = new Date(today);
@@ -141,6 +143,7 @@ export default function Dashboard() {
     weekendNightMin: 10,       // mínimo de paquetes Noche en finde
     minDayAll: 1,              // mínimo paquetes de Día (todos los días)
     minNightWeekday: 1,        // mínimo paquetes de Noche entre semana
+    daySharePercent: 70,       // preferencia: % de paquetes al turno Día (resto Noche)
   });
 
   // Gastos desde API para cálculos de la semana
@@ -159,12 +162,15 @@ export default function Dashboard() {
           weekendNightMin: typeof data.weekendNightMin === 'number' ? data.weekendNightMin : prev.weekendNightMin,
           minDayAll: typeof data.minDayAll === 'number' ? data.minDayAll : prev.minDayAll,
           minNightWeekday: typeof data.minNightWeekday === 'number' ? data.minNightWeekday : prev.minNightWeekday,
+          daySharePercent: typeof data.daySharePercent === 'number' ? data.daySharePercent : prev.daySharePercent,
         }));
+        setLoaded(l => ({ ...l, flex: true }));
       }
     };
     load();
   }, []);
   useEffect(() => {
+    if (!loaded.flex) return;
     apiPut(`/api/settings/flexSettings`, settings).catch(() => {});
   }, [settings]);
 
@@ -216,12 +222,13 @@ export default function Dashboard() {
   useEffect(() => {
     const load = async () => {
       const docs = await apiGet<KnownLocal[]>(`/api/known-locals`);
-      if (Array.isArray(docs)) setKnownLocals(docs);
+      if (Array.isArray(docs)) { setKnownLocals(docs); setLoaded(l => ({ ...l, known: true })); }
     };
     load();
   }, []);
   useEffect(() => {
     // upsert cada local (simple; tamaño pequeño)
+    if (!loaded.known) return;
     knownLocals.forEach(l => {
       if (l?.name) apiPut(`/api/known-locals/${encodeURIComponent(l.name)}`, l).catch(() => {});
     });
@@ -238,11 +245,11 @@ export default function Dashboard() {
     const endStr = end.toISOString().slice(0,10);
     const load = async () => {
       const fin = await apiGet<typeof initialFinancialData>(`/api/settings/financialData`);
-      if (fin && fin.motoGoal) setFinancialData(fin);
+      if (fin && fin.motoGoal) { setFinancialData(fin); setLoaded(l => ({ ...l, financial: true })); }
       const days = await apiGet<DayData[]>(`/api/week-data?start=${encodeURIComponent(startStr)}&end=${encodeURIComponent(endStr)}`);
-      if (Array.isArray(days)) setWeekData(days);
+      if (Array.isArray(days)) { setWeekData(days); setLoaded(l => ({ ...l, week: true })); }
       const wb = await apiGet<Record<string, { vanina?: number; leonardo?: number; registeredSum?: number; registeredAt?: string }>>(`/api/weekly-billing/${encodeURIComponent(startStr)}`);
-      if (wb) setWeeklyBilling(prev => ({ ...prev, [startStr]: wb as any }));
+      if (wb) { setWeeklyBilling(prev => ({ ...prev, [startStr]: wb as any })); setLoaded(l => ({ ...l, billing: true })); }
       const v = await apiGet<Array<{ date: string; amount: number }>>(`/api/expenses/variable`);
       if (Array.isArray(v)) setVarExpensesAll(v);
       const f = await apiGet<Array<{ date: string; amount: number; paid?: boolean }>>(`/api/expenses/fixed`);
@@ -255,14 +262,17 @@ export default function Dashboard() {
   // Guardar en API cuando cambian estructuras principales
   useEffect(() => {
     // upsert por día modificado
+    if (!loaded.week) return;
     weekData.forEach(day => { if (day?.date) apiPut(`/api/week-data/${encodeURIComponent(day.date)}`, day).catch(() => {}); });
   }, [weekData]);
   useEffect(() => {
+    if (!loaded.financial) return;
     apiPut(`/api/settings/financialData`, financialData).catch(() => {});
   }, [financialData]);
   useEffect(() => {
     // Guardar billing de la semana actual si existe clave
     const key = new Date(currentWeekStart).toISOString().slice(0,10);
+    if (!loaded.billing) return;
     if (weeklyBilling[key]) apiPut(`/api/weekly-billing/${encodeURIComponent(key)}`, { ...weeklyBilling[key], weekKey: key }).catch(() => {});
   }, [weeklyBilling, currentWeekStart]);
 
@@ -356,13 +366,14 @@ export default function Dashboard() {
     // Reparto 50/50 por defecto
     const avgRate = (ENVIO_RATES.day + ENVIO_RATES.night) / 2;
     const dailyPackagesNeeded = Math.max(0, Math.ceil(dailyNeeded / avgRate));
+    const dayShare = Math.min(100, Math.max(0, settings.daySharePercent ?? 60)) / 100;
     return {
       totalNeeded: Math.round(remainingAmount),
       faltante: Math.max(0, Math.round(remainingAmount - currentGenerated)),
       daysRemaining,
       dailyPackagesNeeded,
-      leoDay: Math.ceil(dailyPackagesNeeded * 0.5),
-      vaniaNight: Math.ceil(dailyPackagesNeeded * 0.5)
+      leoDay: Math.ceil(dailyPackagesNeeded * dayShare),
+      vaniaNight: Math.ceil(dailyPackagesNeeded * (1 - dayShare))
     };
   };
 
@@ -522,7 +533,8 @@ export default function Dashboard() {
       const raw = localStorage.getItem("mm_daily_targets");
       if (raw) return JSON.parse(raw);
     } catch (e) { console.warn("No se pudo leer mm_daily_targets", e); }
-    return { dayPacks: 11, nightPacks: 11 };
+    // Por preferencia: más paquetes en Día que en Noche
+    return { dayPacks: 14, nightPacks: 8 };
   });
   useEffect(() => {
     try { localStorage.setItem("mm_daily_targets", JSON.stringify(dailyTargets)); } catch (e) { console.warn("No se pudo guardar mm_daily_targets", e); }
@@ -539,12 +551,13 @@ export default function Dashboard() {
   const dayTargetValue = dailyTargets.dayPacks * ENVIO_RATES.day;     // $ objetivo en Día por envíos
   const nightTargetValue = dailyTargets.nightPacks * ENVIO_RATES.night; // $ objetivo en Noche por envíos
   const dayBaseValue = Math.max(0, dayTargetValue - reservationsDay);
-  const dayNeededPacks = Math.max(0, Math.ceil(dayBaseValue / ENVIO_RATES.day));
+  const dayNeededPacks = Math.max(settings.minDayAll || 0, Math.ceil(dayBaseValue / ENVIO_RATES.day));
   const dayRemainingPacks = Math.max(0, dayNeededPacks - (todayData.envios_day_packages || 0));
   const dayShortfallValue = Math.max(0, dayBaseValue - (todayData.envios_day_packages || 0) * ENVIO_RATES.day);
   const dayExcessValue = Math.max(0, (todayData.envios_day_packages || 0) * ENVIO_RATES.day - dayBaseValue);
   const nightBaseValue = Math.max(0, nightTargetValue - reservationsNight);
-  const nightAdjustedValue = Math.max(0, nightBaseValue + dayShortfallValue - dayExcessValue);
+  // Priorizar Día: la Noche no absorbe automáticamente el faltante del Día
+  const nightAdjustedValue = Math.max(0, nightBaseValue - dayExcessValue);
   const nightNeededPacks = Math.max(0, Math.ceil(nightAdjustedValue / ENVIO_RATES.night));
   const nightRemainingPacks = Math.max(0, nightNeededPacks - (todayData.envios_night_packages || 0));
 
