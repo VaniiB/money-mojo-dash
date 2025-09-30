@@ -56,14 +56,14 @@ const mockWeekData: DayData[] = [
 
 // Financial base data (updated goal and deadline)
 const initialFinancialData = {
-  currentSavings: 215000,
+  currentSavings: 1310000, // Actualizado a $1,310,000
   pendingPayments: {
     rapiboy: 75000,
     other: 98000
   },
   monthlyFixedExpenses: 135000 + 50000 + 50000 + 10000 + 100000 + 24000 + 60000 + 20000 + 150000 + 20000, // 619000
   motoGoal: {
-    target: 2500000,
+    target: 2050000, // Corregido a $2,050,000
     current: 120000,
     deadline: "2024-10-20"
   },
@@ -79,7 +79,7 @@ export default function Dashboard() {
   const [weekData, setWeekData] = useState<DayData[]>([]);
   const [financialData, setFinancialData] = useState(initialFinancialData);
   // Flags para evitar sobrescribir la DB al cargar por primera vez
-  const [loaded, setLoaded] = useState<{ flex:boolean; known:boolean; week:boolean; financial:boolean; billing:boolean }>({ flex:false, known:false, week:false, financial:false, billing:false });
+  const [loaded, setLoaded] = useState<{ flex: boolean; known: boolean; week: boolean; financial: boolean; billing: boolean }>({ flex: false, known: false, week: false, financial: false, billing: false });
   const [currentWeekStart, setCurrentWeekStart] = useState(() => {
     const today = new Date();
     const monday = new Date(today);
@@ -171,12 +171,12 @@ export default function Dashboard() {
   }, []);
   useEffect(() => {
     if (!loaded.flex) return;
-    apiPut(`/api/settings/flexSettings`, settings).catch(() => {});
+    apiPut(`/api/settings/flexSettings`, settings).catch(() => { });
   }, [settings]);
 
   // Cargar Google Places usando API Key desde variables de entorno (Vite: VITE_GOOGLE_API_KEY)
   useEffect(() => {
-    const env = (import.meta as unknown as { env?: Record<string, string> }).env || {} as Record<string,string>;
+    const env = (import.meta as unknown as { env?: Record<string, string> }).env || {} as Record<string, string>;
     const apiKey = env.VITE_GOOGLE_API_KEY || "";
     if (!apiKey) return;
     if ((window as unknown as { google?: any }).google?.maps?.places) { setGoogleLoaded(true); return; }
@@ -207,7 +207,7 @@ export default function Dashboard() {
     if (!googleLoaded) return;
     try {
       const svc = new (window as unknown as { google: any }).google.maps.places.PlacesService(document.createElement('div'));
-      svc.getDetails({ placeId, fields: ['name','photos'] }, (details: any, status: string) => {
+      svc.getDetails({ placeId, fields: ['name', 'photos'] }, (details: any, status: string) => {
         if (!details) return;
         const name = details.name || editLocal.name;
         const photoUrl = details.photos && details.photos[0] ? details.photos[0].getUrl({ maxWidth: 128, maxHeight: 128 }) : '';
@@ -230,7 +230,7 @@ export default function Dashboard() {
     // upsert cada local (simple; tamaño pequeño)
     if (!loaded.known) return;
     knownLocals.forEach(l => {
-      if (l?.name) apiPut(`/api/known-locals/${encodeURIComponent(l.name)}`, l).catch(() => {});
+      if (l?.name) apiPut(`/api/known-locals/${encodeURIComponent(l.name)}`, l).catch(() => { });
     });
   }, [knownLocals]);
 
@@ -241,8 +241,8 @@ export default function Dashboard() {
   useEffect(() => {
     const monday = new Date(currentWeekStart);
     const end = new Date(monday); end.setDate(monday.getDate() + 6);
-    const startStr = monday.toISOString().slice(0,10);
-    const endStr = end.toISOString().slice(0,10);
+    const startStr = monday.toISOString().slice(0, 10);
+    const endStr = end.toISOString().slice(0, 10);
     const load = async () => {
       const fin = await apiGet<typeof initialFinancialData>(`/api/settings/financialData`);
       if (fin && fin.motoGoal) {
@@ -272,17 +272,17 @@ export default function Dashboard() {
   useEffect(() => {
     // upsert por día modificado
     if (!loaded.week) return;
-    weekData.forEach(day => { if (day?.date) apiPut(`/api/week-data/${encodeURIComponent(day.date)}`, day).catch(() => {}); });
+    weekData.forEach(day => { if (day?.date) apiPut(`/api/week-data/${encodeURIComponent(day.date)}`, day).catch(() => { }); });
   }, [weekData]);
   useEffect(() => {
     if (!loaded.financial) return;
-    apiPut(`/api/settings/financialData`, financialData).catch(() => {});
+    apiPut(`/api/settings/financialData`, financialData).catch(() => { });
   }, [financialData]);
   useEffect(() => {
     // Guardar billing de la semana actual si existe clave
-    const key = new Date(currentWeekStart).toISOString().slice(0,10);
+    const key = new Date(currentWeekStart).toISOString().slice(0, 10);
     if (!loaded.billing) return;
-    if (weeklyBilling[key]) apiPut(`/api/weekly-billing/${encodeURIComponent(key)}`, { ...weeklyBilling[key], weekKey: key }).catch(() => {});
+    if (weeklyBilling[key]) apiPut(`/api/weekly-billing/${encodeURIComponent(key)}`, { ...weeklyBilling[key], weekKey: key }).catch(() => { });
   }, [weeklyBilling, currentWeekStart]);
 
   const getWeekString = () => {
@@ -521,10 +521,44 @@ export default function Dashboard() {
 
   const weeklyTotals = calculateWeeklyTotals();
   const packagesCalc = calculatePackagesNeeded();
+
+  // Calcular objetivo diario de la moto (martes a domingo, más énfasis en fin de semana)
+  // Considerar el ahorro actual + el progreso de la moto
+  const totalCurrent = financialData.currentSavings + financialData.motoGoal.current;
+  const motoRemaining = Math.max(0, 2050000 - totalCurrent);
+  const today = new Date();
+  const goalDate = new Date(2025, 9, 5); // 5 de octubre
+
+  // Contar días de trabajo (martes a domingo) con pesos diferentes, incluyendo HOY
+  const countWorkdays = (start: Date, end: Date) => {
+    let totalWeight = 0;
+    const current = new Date(start);
+    while (current <= end) {
+      const dayOfWeek = current.getDay();
+      // 2 = martes, 3 = miércoles, 4 = jueves, 5 = viernes, 6 = sábado, 0 = domingo
+      if (dayOfWeek === 2 || dayOfWeek === 3 || dayOfWeek === 4) {
+        // Martes, miércoles, jueves: peso normal (1)
+        totalWeight += 1;
+      } else if (dayOfWeek === 5 || dayOfWeek === 6 || dayOfWeek === 0) {
+        // Viernes, sábado, domingo: más énfasis (1.5)
+        totalWeight += 1.5;
+      }
+      current.setDate(current.getDate() + 1);
+    }
+    return totalWeight;
+  };
+
+  const workdaysWeight = Math.max(1, countWorkdays(today, goalDate));
+  // Calcular meta diaria base (sin multiplicadores)
+  const basePerDayValue = Math.ceil(motoRemaining / workdaysWeight);
   // Mostrar progreso y ahorro incluyendo ahorro adicional (p.e. préstamo)
   const displaySavings = financialData.currentSavings + settings.additionalSavings;
   const displayMotoCurrent = financialData.motoGoal.current + settings.additionalSavings;
   const motoProgress = (displayMotoCurrent / financialData.motoGoal.target) * 100;
+
+  // Calcular gastos totales de la semana para descontar del Panel de Finanzas
+  const weeklyExpenses = weeklyTotals.expensesTotal;
+  const netSavings = financialData.currentSavings - weeklyExpenses; // Solo el ahorro real, sin préstamo
   // Tendencias semana previa
   const prevWeekStart = useMemo(() => {
     const d = new Date(currentWeekStart);
@@ -549,7 +583,7 @@ export default function Dashboard() {
     try { localStorage.setItem("mm_daily_targets", JSON.stringify(dailyTargets)); } catch (e) { console.warn("No se pudo guardar mm_daily_targets", e); }
   }, [dailyTargets]);
 
-  const TODAY_STR = new Date().toISOString().slice(0,10);
+  const TODAY_STR = new Date().toISOString().slice(0, 10);
   // Obtener data del día actual desde weekData (misma estructura que la tabla semanal)
   const todayData = weekData.find(d => d.date === TODAY_STR) || {
     date: TODAY_STR, reservations: [], envios_day_packages: 0, envios_night_packages: 0
@@ -576,7 +610,7 @@ export default function Dashboard() {
   const totalCutsPages = Math.max(1, Math.ceil(weeklyCuts.length / cutsPageSize));
   const pagedWeeklyCuts = weeklyCuts.slice(cutsPage * cutsPageSize, (cutsPage + 1) * cutsPageSize);
 
-  const weekKey = (d: Date) => d.toISOString().slice(0,10);
+  const weekKey = (d: Date) => d.toISOString().slice(0, 10);
   const goToCurrentWeekInCuts = () => {
     const today = new Date();
     const monday = new Date(today);
@@ -595,7 +629,7 @@ export default function Dashboard() {
             Semana del {getWeekString()}
           </p>
         </div>
-        
+
         {/* Navegación de semanas */}
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => setCurrentWeekStart((d) => { const n = new Date(d); n.setDate(n.getDate() - 7); return n; })}>
@@ -624,8 +658,8 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
         <ModernStatCard
           title="Panel de Finanzas"
-          value={formatCurrency(displaySavings)}
-          subtitle="Ahorro actual disponible (incluye préstamo)"
+          value={formatCurrency(netSavings)}
+          subtitle={`Ahorro real: ${formatCurrency(financialData.currentSavings)} - ${formatCurrency(weeklyExpenses)} gastos`}
           icon={DollarSign}
           variant="balance"
           trend={{ value: diffPct(financialData.currentSavings, financialData.currentSavings - weeklyTotals.total), label: "vs semana prev." }}
@@ -642,7 +676,7 @@ export default function Dashboard() {
         <ModernStatCard
           title="Progreso Moto"
           value={`${motoProgress.toFixed(1)}%`}
-          subtitle={`${formatCurrency(displayMotoCurrent)} de ${formatCurrency(financialData.motoGoal.target)}`}
+          subtitle={`${formatCurrency(displayMotoCurrent)} de ${formatCurrency(financialData.motoGoal.target)} (neto: ${formatCurrency(netSavings)})`}
           icon={Target}
           variant="goal"
           progressPercent={motoProgress}
@@ -741,7 +775,7 @@ export default function Dashboard() {
       <div className="hidden dark:block">
         <div className="fixed right-8 bottom-8 pointer-events-none select-none z-10">
           <img
-            src={`${(import.meta as unknown as { env?: Record<string,string> }).env?.BASE_URL ?? '/'}publicdepresion-figure.png.png`}
+            src={`${(import.meta as unknown as { env?: Record<string, string> }).env?.BASE_URL ?? '/'}publicdepresion-figure.png.png`}
             alt="Decoración Depresión contable"
             className="opacity-95 w-[200px] h-[200px]"
           />
@@ -771,13 +805,17 @@ export default function Dashboard() {
           {(() => {
             try {
               const goalDate = new Date(2025, 9, 5);
-              const today0 = new Date(); today0.setHours(0,0,0,0);
+              const today0 = new Date(); today0.setHours(0, 0, 0, 0);
               const tomorrow0 = new Date(today0); tomorrow0.setDate(tomorrow0.getDate() + 1);
-              const msDay = 1000*60*60*24;
-              // Armar lista de fechas desde mañana hasta 05/10
+              const msDay = 1000 * 60 * 60 * 24;
+              // Armar lista de fechas desde HOY hasta 05/10 (martes a domingo)
               const dates: string[] = [];
-              for (let d = new Date(tomorrow0); d <= goalDate; d.setDate(d.getDate() + 1)) {
-                dates.push(d.toISOString().split('T')[0]);
+              for (let d = new Date(today0); d <= goalDate; d.setDate(d.getDate() + 1)) {
+                const dayOfWeek = d.getDay();
+                // Solo incluir días de trabajo: martes(2), miércoles(3), jueves(4), viernes(5), sábado(6), domingo(0)
+                if (dayOfWeek === 2 || dayOfWeek === 3 || dayOfWeek === 4 || dayOfWeek === 5 || dayOfWeek === 6 || dayOfWeek === 0) {
+                  dates.push(d.toISOString().split('T')[0]);
+                }
               }
               // Calcular faltante global
               const currentTotal = financialData.currentSavings + settings.additionalSavings;
@@ -788,8 +826,10 @@ export default function Dashboard() {
                 totalFutureReservations += dd.reservations.reduce((s, r) => s + r.amount, 0);
                 totalFuturePackages += (dd.envios_day_packages * ENVIO_RATES.day) + (dd.envios_night_packages * ENVIO_RATES.night);
               });
-              const remainingAmount = Math.max(0, 2050000 - currentTotal - totalFutureReservations - totalFuturePackages);
-              const perDayValue = dates.length > 0 ? Math.ceil(remainingAmount / dates.length) : 0;
+
+              // Calcular dinero faltante para el objetivo de la moto
+              const motoRemaining = Math.max(0, 2050000 - financialData.motoGoal.current);
+              const perDayValue = dates.length > 0 ? Math.ceil(motoRemaining / dates.length) : 0;
 
               // Calcular acarreo desde HOY (si hoy no cumplió su objetivo por turno)
               const todayStr = today0.toISOString().split('T')[0];
@@ -812,40 +852,65 @@ export default function Dashboard() {
               // aplicar mínimos al acarreo también
               carryDayPacks = Math.max(0, carryDayPacks);
               carryNightPacks = Math.max(0, carryNightPacks);
-              const plan: Record<string, {dayLeft: number; nightLeft: number}> = {};
+              const plan: Record<string, { dayLeft: number; nightLeft: number }> = {};
               dates.forEach((ds, idx) => {
                 const d = new Date(ds);
                 const dd = weekData.find(w => w.date === ds) || { date: ds, reservations: [], envios_day_packages: 0, envios_night_packages: 0 };
                 const resDay = dd.reservations.filter(r => r.shift === 'dia').reduce((s, r) => s + r.amount, 0);
                 const resNight = dd.reservations.filter(r => r.shift === 'noche').reduce((s, r) => s + r.amount, 0);
                 const dow = d.getDay();
-                const isWeekend = (dow === 5 || dow === 6 || dow === 0);
+                const isWeekend = (dow === 5 || dow === 6 || dow === 0); // viernes, sábado, domingo
                 const nightWeight = (isWeekend ? settings.nightWeightWeekend : settings.nightWeightWeekday) / 100;
                 const dayWeight = Math.max(0, 1 - nightWeight);
-                // objetivos por turno + acarreo del día anterior (en valor)
-                const dayTargetValue = perDayValue * dayWeight + carryDayPacks * ENVIO_RATES.day;
-                const nightTargetValue = perDayValue * nightWeight + carryNightPacks * ENVIO_RATES.night;
-                const dayAfterRes = Math.max(0, dayTargetValue - resDay);
-                const nightAfterRes = Math.max(0, nightTargetValue - resNight);
-                const dayAfterDone = Math.max(0, dayAfterRes - (dd.envios_day_packages * ENVIO_RATES.day));
-                const nightAfterDone = Math.max(0, nightAfterRes - (dd.envios_night_packages * ENVIO_RATES.night));
-                let dayLeft = ceilDiv(dayAfterDone, ENVIO_RATES.day);
-                let nightLeft = ceilDiv(nightAfterDone, ENVIO_RATES.night);
-                // mínimos
-                dayLeft = Math.max(settings.minDayAll, dayLeft);
-                nightLeft = Math.max(isWeekend ? settings.weekendNightMin : settings.minNightWeekday, nightLeft);
+
+                // Calcular dinero faltante por turno basado en el objetivo de la moto
+                // Aplicar más carga en fin de semana (viernes, sábado, domingo)
+                const weekendMultiplier = isWeekend ? 1.5 : 1; // 50% más en fin de semana
+
+                const dayTargetValue = basePerDayValue * dayWeight * weekendMultiplier;
+                const nightTargetValue = basePerDayValue * nightWeight * weekendMultiplier;
+
+                // Calcular cuánto ya se juntó en este día (reservas + envíos)
+                const dayEarned = resDay + (dd.envios_day_packages * ENVIO_RATES.day);
+                const nightEarned = resNight + (dd.envios_night_packages * ENVIO_RATES.night);
+                const totalEarned = dayEarned + nightEarned;
+
+                // Calcular cuánto falta para el objetivo diario
+                const dayRemaining = Math.max(0, dayTargetValue - dayEarned);
+                const nightRemaining = Math.max(0, nightTargetValue - nightEarned);
+
+                // Si un turno no tiene reservas, el otro debe compensar (70% vs 30%)
+                const totalNeeded = dayRemaining + nightRemaining;
+                let finalDayTarget = dayRemaining;
+                let finalNightTarget = nightRemaining;
+
+                if (resDay === 0 && resNight > 0) {
+                  // Solo noche tiene reservas, día debe hacer 70%
+                  finalDayTarget = totalNeeded * 0.7;
+                  finalNightTarget = totalNeeded * 0.3;
+                } else if (resNight === 0 && resDay > 0) {
+                  // Solo día tiene reservas, noche debe hacer 70%
+                  finalDayTarget = totalNeeded * 0.3;
+                  finalNightTarget = totalNeeded * 0.7;
+                } else if (resDay === 0 && resNight === 0) {
+                  // Ninguno tiene reservas, distribución 50/50
+                  finalDayTarget = totalNeeded * 0.5;
+                  finalNightTarget = totalNeeded * 0.5;
+                }
+
+                // Convertir a paquetes para mostrar (pero el cálculo principal es en dinero)
+                const dayLeft = Math.max(0, Math.ceil(finalDayTarget / ENVIO_RATES.day));
+                const nightLeft = Math.max(0, Math.ceil(finalNightTarget / ENVIO_RATES.night));
+
                 plan[ds] = { dayLeft, nightLeft };
-                // El acarreo solo se calcula desde HOY hacia MAÑANA. Para el resto de días no propagamos.
-                carryDayPacks = 0;
-                carryNightPacks = 0;
               });
-              (window as unknown as { __mm_planByDate?: Record<string, {dayLeft: number; nightLeft: number}> }).__mm_planByDate = plan;
+              (window as unknown as { __mm_planByDate?: Record<string, { dayLeft: number; nightLeft: number }> }).__mm_planByDate = plan;
             } catch (e) { console.warn('plan precompute failed', e); }
             return null;
           })()}
           {/* Contenedor responsivo: evita desbordes y mantiene todo dentro del card */}
           <div className="overflow-x-auto">
-              <table className="w-full table-auto text-sm min-w-[1100px]">
+            <table className="w-full table-auto text-sm min-w-[1100px]">
               <colgroup>
                 <col className="w-[120px]" />
                 <col className="w-[220px]" />
@@ -855,7 +920,7 @@ export default function Dashboard() {
                 <col className="w-[90px]" />
                 <col className="w-[110px]" />
                 <col className="w-[130px]" />
-                
+
                 <col className="w-[90px]" />
                 <col className="w-[90px]" />
                 <col className="w-[120px]" />
@@ -868,8 +933,8 @@ export default function Dashboard() {
                   <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">A Cob.</th>
                   <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">PaqD</th>
                   <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">PaqN</th>
-                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">Día a hacer</th>
-                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">Noche a hacer</th>
+                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">$ Día a hacer</th>
+                  <th className="text-center p-2 font-medium text-muted-foreground whitespace-nowrap">$ Noche a hacer</th>
                   <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">Env.</th>
                   <th className="text-right p-2 font-medium text-muted-foreground whitespace-nowrap">Total</th>
                   <th className="text-center p-2 pr-6 font-medium text-muted-foreground whitespace-nowrap">Acc.</th>
@@ -877,250 +942,250 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {[
-"Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"].map((dayName, index) => {
-                  const dayData = getDayData(index);
-                  const dayDate = new Date(currentWeekStart);
-                  dayDate.setDate(currentWeekStart.getDate() + index);
-                  const dateString = dayDate.toISOString().split('T')[0];
+                  "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"].map((dayName, index) => {
+                    const dayData = getDayData(index);
+                    const dayDate = new Date(currentWeekStart);
+                    dayDate.setDate(currentWeekStart.getDate() + index);
+                    const dateString = dayDate.toISOString().split('T')[0];
 
-                  const cobradas = dayData.reservations.filter(r => r.status === "cobrado").reduce((sum, r) => sum + r.amount, 0);
-                  const aCobrar = dayData.reservations.filter(r => r.status !== "cobrado").reduce((sum, r) => sum + r.amount, 0);
-                  const envios = (dayData.envios_day_packages * ENVIO_RATES.day) + (dayData.envios_night_packages * ENVIO_RATES.night);
-                  const reservasDiaTotal = cobradas + aCobrar;
-                  const total = reservasDiaTotal + envios;
+                    const cobradas = dayData.reservations.filter(r => r.status === "cobrado").reduce((sum, r) => sum + r.amount, 0);
+                    const aCobrar = dayData.reservations.filter(r => r.status !== "cobrado").reduce((sum, r) => sum + r.amount, 0);
+                    const envios = (dayData.envios_day_packages * ENVIO_RATES.day) + (dayData.envios_night_packages * ENVIO_RATES.night);
+                    const reservasDiaTotal = cobradas + aCobrar;
+                    const total = reservasDiaTotal + envios;
 
-                  // Cálculo de paquetes a hacer por turno (usa dailyTargets guardados)
-                  const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-                  const thisDate = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate());
-                  const isPastOrToday = thisDate.getTime() <= todayStart.getTime();
-                  const ds = dateString;
-                  const p = (window as unknown as { __mm_planByDate?: Record<string, {dayLeft: number; nightLeft: number}> }).__mm_planByDate;
-                  const computed = (!isPastOrToday && p) ? p[ds] : undefined;
-                  const dayLeft = computed?.dayLeft ?? 0;
-                  const nightLeft = computed?.nightLeft ?? 0;
+                    // Cálculo de paquetes a hacer por turno (usa dailyTargets guardados)
+                    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+                    const thisDate = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate());
+                    const isPastOrToday = thisDate.getTime() <= todayStart.getTime();
+                    const ds = dateString;
+                    const p = (window as unknown as { __mm_planByDate?: Record<string, { dayLeft: number; nightLeft: number }> }).__mm_planByDate;
+                    const computed = (!isPastOrToday && p) ? p[ds] : undefined;
+                    const dayLeft = computed?.dayLeft ?? 0;
+                    const nightLeft = computed?.nightLeft ?? 0;
 
-                  return (
-                    <tr key={index} className="border-b border-border/50 hover:bg-muted/20 transition-colors">
-                      <td className="p-3 pl-6">
-                        <div>
-                          <div className="font-medium">{dayName}</div>
-                          <div className="text-xs text-muted-foreground">{dayDate.getDate()}/{dayDate.getMonth() + 1}</div>
-                        </div>
-                      </td>
-                      <td className="p-3">
-                        <div className="space-y-1 max-w-xs">
-                          {dayData.reservations.map((res) => (
-                            <div key={res.id} className="text-xs bg-muted/50 rounded px-2 py-1">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <img
-                                    src={getLocalLogo(res.local)}
-                                    alt={res.local}
-                                    className="h-4 w-4 rounded-sm"
-                                    onError={(e: SyntheticEvent<HTMLImageElement>) => {
-                                      const seed = encodeURIComponent(res.local);
-                                      (e.currentTarget as HTMLImageElement).src = `https://api.dicebear.com/7.x/initials/svg?seed=${seed}`;
-                                    }}
-                                  />
-                                  <button type="button" className="font-medium hover:underline" onClick={() => setOpenResId(id => id === res.id ? null : res.id)}>
-                                    {res.local}
-                                  </button>
-                                  <Button size="icon" variant={isFavoriteLocal(res.local) ? "secondary" : "ghost"} className="h-5 w-5"
-                                    title={isFavoriteLocal(res.local) ? "Quitar de favoritos" : "Guardar como favorito"}
-                                    onClick={() => toggleFavoriteLocal(res.local, getLocalLogo(res.local))}
-                                  >
-                                    <Star className="h-3 w-3" fill={isFavoriteLocal(res.local) ? "currentColor" : "none"} />
-                                  </Button>
+                    return (
+                      <tr key={index} className="border-b border-border/50 hover:bg-muted/20 transition-colors">
+                        <td className="p-3 pl-6">
+                          <div>
+                            <div className="font-medium">{dayName}</div>
+                            <div className="text-xs text-muted-foreground">{dayDate.getDate()}/{dayDate.getMonth() + 1}</div>
+                          </div>
+                        </td>
+                        <td className="p-3">
+                          <div className="space-y-1 max-w-xs">
+                            {dayData.reservations.map((res) => (
+                              <div key={res.id} className="text-xs bg-muted/50 rounded px-2 py-1">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <img
+                                      src={getLocalLogo(res.local)}
+                                      alt={res.local}
+                                      className="h-4 w-4 rounded-sm"
+                                      onError={(e: SyntheticEvent<HTMLImageElement>) => {
+                                        const seed = encodeURIComponent(res.local);
+                                        (e.currentTarget as HTMLImageElement).src = `https://api.dicebear.com/7.x/initials/svg?seed=${seed}`;
+                                      }}
+                                    />
+                                    <button type="button" className="font-medium hover:underline" onClick={() => setOpenResId(id => id === res.id ? null : res.id)}>
+                                      {res.local}
+                                    </button>
+                                    <Button size="icon" variant={isFavoriteLocal(res.local) ? "secondary" : "ghost"} className="h-5 w-5"
+                                      title={isFavoriteLocal(res.local) ? "Quitar de favoritos" : "Guardar como favorito"}
+                                      onClick={() => toggleFavoriteLocal(res.local, getLocalLogo(res.local))}
+                                    >
+                                      <Star className="h-3 w-3" fill={isFavoriteLocal(res.local) ? "currentColor" : "none"} />
+                                    </Button>
+                                  </div>
+                                  <span className="text-muted-foreground">${res.amount.toLocaleString('es-AR')}</span>
                                 </div>
-                                <span className="text-muted-foreground">${res.amount.toLocaleString('es-AR')}</span>
+                                {openResId === res.id && (
+                                  <div className="mt-1 flex items-center gap-2">
+                                    <Select value={res.status} onValueChange={(value: Reservation["status"]) => updateReservationStatus(res.id, value)}>
+                                      <SelectTrigger className="h-6 w-28 text-xs">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="reservado">Reservado</SelectItem>
+                                        <SelectItem value="facturado">Facturado</SelectItem>
+                                        <SelectItem value="cobrado">Cobrado</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                    <Button size="sm" variant="ghost" className="h-6 px-2" title="Eliminar"
+                                      onClick={() => setWeekData(prev => prev.map(d => d.date === dateString ? ({ ...d, reservations: d.reservations.filter(r => r.id !== res.id) }) : d))}
+                                    >
+                                      Eliminar
+                                    </Button>
+                                  </div>
+                                )}
+                                {openResId === res.id && (
+                                  <div className="mt-2 space-y-2">
+                                    <div className="flex items-center gap-2">
+                                      <Input
+                                        placeholder="Buscar/editar nombre del local"
+                                        value={editLocal.name || res.local}
+                                        onFocus={() => setEditLocal({ name: res.local, logoUrl: "" })}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setEditLocal((p) => ({ ...p, name: val }));
+                                          // Autocomplete online (debounce)
+                                          if (placeDebounceRef.current) window.clearTimeout(placeDebounceRef.current);
+                                          placeDebounceRef.current = window.setTimeout(() => searchPlacesOnline(val), 350);
+                                        }}
+                                        className="h-7 text-xs"
+                                      />
+                                      <Button size="sm" className="h-7"
+                                        onClick={() => {
+                                          const name = (editLocal.name || res.local).trim();
+                                          // actualizar reserva
+                                          setWeekData(prev => prev.map(day => day.date === dateString ? ({
+                                            ...day,
+                                            reservations: day.reservations.map(r => r.id === res.id ? ({ ...r, local: name }) : r)
+                                          }) : day));
+                                          // guardar/actualizar en locales conocidos
+                                          setKnownLocals(prev => {
+                                            const idx = prev.findIndex(k => k.name.toLowerCase() === name.toLowerCase());
+                                            const updated = [...prev];
+                                            const entry = { name } as KnownLocal;
+                                            if (idx >= 0) updated[idx] = { ...updated[idx], ...entry };
+                                            else updated.push(entry);
+                                            return updated;
+                                          });
+                                          setEditLocal({ name: "", logoUrl: "" });
+                                        }}
+                                      >Guardar</Button>
+                                    </div>
+                                    {/* Sugerencias rápidas (locales conocidos) */}
+                                    <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
+                                      {knownLocals
+                                        .filter(k => (editLocal.name || res.local).length === 0 ? true : k.name.toLowerCase().includes((editLocal.name || res.local).toLowerCase()))
+                                        .slice(0, 6)
+                                        .map(k => (
+                                          <Button key={k.name} size="sm" variant="outline" className="h-6"
+                                            onClick={() => setEditLocal({ name: k.name, logoUrl: k.logoUrl || "" })}
+                                          >{k.name}</Button>
+                                        ))}
+                                    </div>
+                                    {/* Resultados online (Google Places) */}
+                                    {googleLoaded && (
+                                      <div className="flex flex-wrap gap-1 text-[11px] text-muted-foreground">
+                                        {placesLoading && <span>Buscando...</span>}
+                                        {!placesLoading && placePredictions.slice(0, 6).map(p => (
+                                          <Button key={p.place_id} size="sm" variant="ghost" className="h-6"
+                                            onClick={() => pickPlacePrediction(p.place_id)}
+                                          >{p.description}</Button>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                               </div>
-                              {openResId === res.id && (
-                                <div className="mt-1 flex items-center gap-2">
-                                  <Select value={res.status} onValueChange={(value: Reservation["status"]) => updateReservationStatus(res.id, value)}>
-                                    <SelectTrigger className="h-6 w-28 text-xs">
+                            ))}
+                            {showNewReservation === dateString && (
+                              <div className="space-y-2 p-2 bg-background rounded border">
+                                <Input
+                                  placeholder="Local"
+                                  value={newReservation.local}
+                                  onChange={(e) => setNewReservation({ ...newReservation, local: e.target.value })}
+                                  className="h-8 text-xs"
+                                />
+                                <Input
+                                  placeholder="Monto"
+                                  type="number"
+                                  value={newReservation.amount}
+                                  onChange={(e) => setNewReservation({ ...newReservation, amount: e.target.value })}
+                                  className="h-8 text-xs"
+                                />
+                                <div className="flex space-x-1">
+                                  <Select value={newReservation.person} onValueChange={(value: "vanina" | "leonardo") => setNewReservation({ ...newReservation, person: value })}>
+                                    <SelectTrigger className="h-8 text-xs">
                                       <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
-                                      <SelectItem value="reservado">Reservado</SelectItem>
-                                      <SelectItem value="facturado">Facturado</SelectItem>
-                                      <SelectItem value="cobrado">Cobrado</SelectItem>
+                                      <SelectItem value="vanina">Vanina</SelectItem>
+                                      <SelectItem value="leonardo">Leonardo</SelectItem>
                                     </SelectContent>
                                   </Select>
-                                  <Button size="sm" variant="ghost" className="h-6 px-2" title="Eliminar"
-                                    onClick={() => setWeekData(prev => prev.map(d => d.date === dateString ? ({...d, reservations: d.reservations.filter(r => r.id !== res.id)}) : d))}
-                                  >
-                                    Eliminar
+                                  <Select value={newReservation.shift} onValueChange={(value: "dia" | "noche") => setNewReservation({ ...newReservation, shift: value })}>
+                                    <SelectTrigger className="h-8 text-xs">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="dia">Día</SelectItem>
+                                      <SelectItem value="noche">Noche</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="flex space-x-1">
+                                  <Button size="sm" onClick={() => addReservation(dateString)} className="h-6 text-xs">
+                                    Guardar
+                                  </Button>
+                                  <Button size="sm" variant="outline" onClick={() => setShowNewReservation(null)} className="h-6 text-xs">
+                                    Cancelar
                                   </Button>
                                 </div>
-                              )}
-                              {openResId === res.id && (
-                                <div className="mt-2 space-y-2">
-                                  <div className="flex items-center gap-2">
-                                    <Input
-                                      placeholder="Buscar/editar nombre del local"
-                                      value={editLocal.name || res.local}
-                                      onFocus={() => setEditLocal({ name: res.local, logoUrl: "" })}
-                                      onChange={(e) => {
-                                        const val = e.target.value;
-                                        setEditLocal((p) => ({ ...p, name: val }));
-                                        // Autocomplete online (debounce)
-                                        if (placeDebounceRef.current) window.clearTimeout(placeDebounceRef.current);
-                                        placeDebounceRef.current = window.setTimeout(() => searchPlacesOnline(val), 350);
-                                      }}
-                                      className="h-7 text-xs"
-                                    />
-                                    <Button size="sm" className="h-7"
-                                      onClick={() => {
-                                        const name = (editLocal.name || res.local).trim();
-                                        // actualizar reserva
-                                        setWeekData(prev => prev.map(day => day.date === dateString ? ({
-                                          ...day,
-                                          reservations: day.reservations.map(r => r.id === res.id ? ({ ...r, local: name }) : r)
-                                        }) : day));
-                                        // guardar/actualizar en locales conocidos
-                                        setKnownLocals(prev => {
-                                          const idx = prev.findIndex(k => k.name.toLowerCase() === name.toLowerCase());
-                                          const updated = [...prev];
-                                          const entry = { name } as KnownLocal;
-                                          if (idx >= 0) updated[idx] = { ...updated[idx], ...entry };
-                                          else updated.push(entry);
-                                          return updated;
-                                        });
-                                        setEditLocal({ name: "", logoUrl: "" });
-                                      }}
-                                    >Guardar</Button>
-                                  </div>
-                                  {/* Sugerencias rápidas (locales conocidos) */}
-                                  <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
-                                    {knownLocals
-                                      .filter(k => (editLocal.name || res.local).length === 0 ? true : k.name.toLowerCase().includes((editLocal.name || res.local).toLowerCase()))
-                                      .slice(0,6)
-                                      .map(k => (
-                                        <Button key={k.name} size="sm" variant="outline" className="h-6"
-                                          onClick={() => setEditLocal({ name: k.name, logoUrl: k.logoUrl || "" })}
-                                        >{k.name}</Button>
-                                      ))}
-                                  </div>
-                                  {/* Resultados online (Google Places) */}
-                                  {googleLoaded && (
-                                    <div className="flex flex-wrap gap-1 text-[11px] text-muted-foreground">
-                                      {placesLoading && <span>Buscando...</span>}
-                                      {!placesLoading && placePredictions.slice(0,6).map(p => (
-                                        <Button key={p.place_id} size="sm" variant="ghost" className="h-6"
-                                          onClick={() => pickPlacePrediction(p.place_id)}
-                                        >{p.description}</Button>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                          {showNewReservation === dateString && (
-                            <div className="space-y-2 p-2 bg-background rounded border">
-                              <Input
-                                placeholder="Local"
-                                value={newReservation.local}
-                                onChange={(e) => setNewReservation({ ...newReservation, local: e.target.value })}
-                                className="h-8 text-xs"
-                              />
-                              <Input
-                                placeholder="Monto"
-                                type="number"
-                                value={newReservation.amount}
-                                onChange={(e) => setNewReservation({ ...newReservation, amount: e.target.value })}
-                                className="h-8 text-xs"
-                              />
-                              <div className="flex space-x-1">
-                                <Select value={newReservation.person} onValueChange={(value: "vanina" | "leonardo") => setNewReservation({ ...newReservation, person: value })}>
-                                  <SelectTrigger className="h-8 text-xs">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="vanina">Vanina</SelectItem>
-                                    <SelectItem value="leonardo">Leonardo</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                                <Select value={newReservation.shift} onValueChange={(value: "dia" | "noche") => setNewReservation({ ...newReservation, shift: value })}>
-                                  <SelectTrigger className="h-8 text-xs">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="dia">Día</SelectItem>
-                                    <SelectItem value="noche">Noche</SelectItem>
-                                  </SelectContent>
-                                </Select>
                               </div>
-                              <div className="flex space-x-1">
-                                <Button size="sm" onClick={() => addReservation(dateString)} className="h-6 text-xs">
-                                  Guardar
-                                </Button>
-                                <Button size="sm" variant="outline" onClick={() => setShowNewReservation(null)} className="h-6 text-xs">
-                                  Cancelar
-                                </Button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </td>
-                      <td className="p-3 text-right">
-                        <span className="font-semibold text-income">{formatCurrency(cobradas)}</span>
-                      </td>
-                      <td className="p-3 text-right">
-                        <span className="font-semibold text-goal">{formatCurrency(aCobrar)}</span>
-                      </td>
-                      <td className="p-2 text-center">
-                        <Input
-                          type="number"
-                          value={(pendingPackages[dateString]?.day ?? dayData.envios_day_packages)}
-                          onChange={(e) => {
-                            const v = Math.max(0, parseInt(e.target.value) || 0);
-                            setPendingPackages(prev => ({...prev, [dateString]: { day: v, night: (prev[dateString]?.night ?? dayData.envios_night_packages) }}));
-                          }}
-                          className="w-14 h-8 text-center text-xs"
-                        />
-                      </td>
-                      <td className="p-2 text-center">
-                        <Input
-                          type="number"
-                          value={(pendingPackages[dateString]?.night ?? dayData.envios_night_packages)}
-                          onChange={(e) => {
-                            const v = Math.max(0, parseInt(e.target.value) || 0);
-                            setPendingPackages(prev => ({...prev, [dateString]: { day: (prev[dateString]?.day ?? dayData.envios_day_packages), night: v }}));
-                          }}
-                          className="w-14 h-8 text-center text-xs"
-                        />
-                      </td>
-                      <td className="p-2 text-center font-semibold">{dayLeft}</td>
-                      <td className="p-2 text-center font-semibold">{nightLeft}</td>
-                      <td className="p-3 text-right">
-                        <span className="font-medium">{formatCurrency(envios)}</span>
-                      </td>
-                      <td className="p-3 text-right">
-                        <span className="font-bold">{formatCurrency(total)}</span>
-                      </td>
-                      <td className="p-3 text-center pr-4">
-                        <div className="flex items-center justify-center gap-1">
-                          <Button size="icon" variant="outline" className="h-7 w-7" title="Agregar reserva" onClick={() => setShowNewReservation(dateString)}>
-                            <Plus className="h-4 w-4" />
-                          </Button>
-                          <Button size="sm" variant="secondary" title="Aplicar paquetes"
-                            onClick={() => {
-                              const pend = pendingPackages[dateString] ?? { day: dayData.envios_day_packages, night: dayData.envios_night_packages };
-                              const d = Math.max(0, pend.day|0);
-                              const n = Math.max(0, pend.night|0);
-                              updatePackages(dateString, "day", d);
-                              updatePackages(dateString, "night", n);
-                              setPendingPackages(prev => ({...prev, [dateString]: { day: d, night: n }}));
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-3 text-right">
+                          <span className="font-semibold text-income">{formatCurrency(cobradas)}</span>
+                        </td>
+                        <td className="p-3 text-right">
+                          <span className="font-semibold text-goal">{formatCurrency(aCobrar)}</span>
+                        </td>
+                        <td className="p-2 text-center">
+                          <Input
+                            type="number"
+                            value={(pendingPackages[dateString]?.day ?? dayData.envios_day_packages)}
+                            onChange={(e) => {
+                              const v = Math.max(0, parseInt(e.target.value) || 0);
+                              setPendingPackages(prev => ({ ...prev, [dateString]: { day: v, night: (prev[dateString]?.night ?? dayData.envios_night_packages) } }));
                             }}
-                          >Aplicar</Button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                            className="w-14 h-8 text-center text-xs"
+                          />
+                        </td>
+                        <td className="p-2 text-center">
+                          <Input
+                            type="number"
+                            value={(pendingPackages[dateString]?.night ?? dayData.envios_night_packages)}
+                            onChange={(e) => {
+                              const v = Math.max(0, parseInt(e.target.value) || 0);
+                              setPendingPackages(prev => ({ ...prev, [dateString]: { day: (prev[dateString]?.day ?? dayData.envios_day_packages), night: v } }));
+                            }}
+                            className="w-14 h-8 text-center text-xs"
+                          />
+                        </td>
+                        <td className="p-2 text-center font-semibold">{formatCurrency(dayLeft * ENVIO_RATES.day)}</td>
+                        <td className="p-2 text-center font-semibold">{formatCurrency(nightLeft * ENVIO_RATES.night)}</td>
+                        <td className="p-3 text-right">
+                          <span className="font-medium">{formatCurrency(envios)}</span>
+                        </td>
+                        <td className="p-3 text-right">
+                          <span className="font-bold">{formatCurrency(total)}</span>
+                        </td>
+                        <td className="p-3 text-center pr-4">
+                          <div className="flex items-center justify-center gap-1">
+                            <Button size="icon" variant="outline" className="h-7 w-7" title="Agregar reserva" onClick={() => setShowNewReservation(dateString)}>
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                            <Button size="sm" variant="secondary" title="Aplicar paquetes"
+                              onClick={() => {
+                                const pend = pendingPackages[dateString] ?? { day: dayData.envios_day_packages, night: dayData.envios_night_packages };
+                                const d = Math.max(0, pend.day | 0);
+                                const n = Math.max(0, pend.night | 0);
+                                updatePackages(dateString, "day", d);
+                                updatePackages(dateString, "night", n);
+                                setPendingPackages(prev => ({ ...prev, [dateString]: { day: d, night: n } }));
+                              }}
+                            >Aplicar</Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
               </tbody>
-              </table>
+            </table>
           </div>
 
           {/* Weekly Summary */}
@@ -1145,19 +1210,19 @@ export default function Dashboard() {
             </div>
 
             <div className="mt-4 p-3 bg-background rounded border">
-              <h4 className="font-medium mb-2">Paquetes Necesarios para Objetivo:</h4>
+              <h4 className="font-medium mb-2">Objetivo Moto - Progreso Diario:</h4>
               <div className="grid grid-cols-2 gap-4 text-xs">
                 <div>
-                  <span className="text-muted-foreground block">Leo Día</span>
-                  <span className="font-bold text-balance">{packagesCalc.leoDay} paq.</span>
+                  <span className="text-muted-foreground block">Meta diaria base</span>
+                  <span className="font-bold text-balance">{formatCurrency(basePerDayValue)}</span>
                 </div>
                 <div>
-                  <span className="text-muted-foreground block">Vani Noche</span>
-                  <span className="font-bold text-goal">{packagesCalc.vaniaNight} paq.</span>
+                  <span className="text-muted-foreground block">Faltante total</span>
+                  <span className="font-bold text-goal">{formatCurrency(motoRemaining)}</span>
                 </div>
               </div>
               <div className="mt-2 text-xs text-muted-foreground">
-                Faltante hasta 20/10: {formatCurrency(packagesCalc.faltante)} | Días restantes: {packagesCalc.daysRemaining} | Paquetes/día: {packagesCalc.dailyPackagesNeeded}
+                Objetivo: {formatCurrency(2050000)} | Actual: {formatCurrency(totalCurrent)} (Ahorro: {formatCurrency(financialData.currentSavings)} + Moto: {formatCurrency(financialData.motoGoal.current)}) | Días de trabajo restantes: {workdaysWeight.toFixed(1)} (martes-dom, fin de semana +50% carga)
               </div>
             </div>
           </div>
@@ -1194,12 +1259,12 @@ export default function Dashboard() {
               <tbody>
                 {pagedWeeklyCuts.map((w, idx) => {
                   const totals = getWeekTotals(w.start);
-                  const isMotoGoalWeek = w.start.toISOString().slice(0,10) === '2024-10-13';
+                  const isMotoGoalWeek = w.start.toISOString().slice(0, 10) === '2024-10-13';
                   const motoOk = financialData.currentSavings >= 2050000;
                   const key = weekKey(w.start);
                   const wb = weeklyBilling[key] || {};
                   return (
-                    <tr key={idx} className={`border-b border-border/50 hover:bg-muted/20 transition-colors ${isMotoGoalWeek ? (motoOk ? 'bg-income-light/50' : 'bg-expense-light/30') : ''}`}>
+                    <tr key={idx} className={`border-b border-border/50 hover:bg-muted/20 transition-colors ${isMotoGoalWeek ? (motoOk ? 'bg-income-light/50' : 'bg-expense-light/30') : ''} ${wb.registeredSum ? 'bg-muted/30 opacity-75' : ''}`}>
                       <td className="p-3 text-center">
                         {w.label}
                         {isMotoGoalWeek && (
@@ -1217,18 +1282,20 @@ export default function Dashboard() {
                         <Input
                           type="number"
                           value={wb.vanina ?? ''}
-                          onChange={(e) => setWeeklyBilling(prev => ({...prev, [key]: { ...(prev[key]||{}), vanina: e.target.value ? parseFloat(e.target.value) : undefined }}))}
+                          onChange={(e) => setWeeklyBilling(prev => ({ ...prev, [key]: { ...(prev[key] || {}), vanina: e.target.value ? parseFloat(e.target.value) : undefined } }))}
                           className="h-8 w-28 text-center text-xs"
                           placeholder="$ Vani"
+                          disabled={!!wb.registeredSum}
                         />
                       </td>
                       <td className="p-3 text-center">
                         <Input
                           type="number"
                           value={wb.leonardo ?? ''}
-                          onChange={(e) => setWeeklyBilling(prev => ({...prev, [key]: { ...(prev[key]||{}), leonardo: e.target.value ? parseFloat(e.target.value) : undefined }}))}
+                          onChange={(e) => setWeeklyBilling(prev => ({ ...prev, [key]: { ...(prev[key] || {}), leonardo: e.target.value ? parseFloat(e.target.value) : undefined } }))}
                           className="h-8 w-28 text-center text-xs"
                           placeholder="$ Leo"
+                          disabled={!!wb.registeredSum}
                         />
                       </td>
                       <td className="p-3 text-center">
@@ -1247,7 +1314,7 @@ export default function Dashboard() {
                             // Marcar como registrado para no duplicar
                             setWeeklyBilling(prev => ({
                               ...prev,
-                              [key]: { ...(prev[key]||{}), registeredSum: sum, registeredAt: new Date().toISOString() }
+                              [key]: { ...(prev[key] || {}), registeredSum: sum, registeredAt: new Date().toISOString() }
                             }));
                           }}>Registrar</Button>
                         )}

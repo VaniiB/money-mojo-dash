@@ -20,7 +20,7 @@ type Accessory = {
 
 export default function Objetivos() {
   // Moto (único con barra de progreso visible)
-  const MOTO_TARGET = 2500000;
+  const MOTO_TARGET = 2050000; // Corregido a $2,050,000
   const [motoCurrent, setMotoCurrent] = useState<number>(0);
   // Papeles / documentación (sin barra, solo monto objetivo)
   const DOCUMENTS_TARGET = 300000;
@@ -94,7 +94,7 @@ export default function Objetivos() {
         try {
           const fin = JSON.parse(e.newValue);
           if (fin?.motoGoal?.current != null) setMotoCurrent(fin.motoGoal.current);
-        } catch {}
+        } catch { }
       }
     };
     window.addEventListener('storage', onStorage);
@@ -102,7 +102,7 @@ export default function Objetivos() {
   }, []);
   // Nota: ya NO escribimos en mm_financialData desde Objetivos para no desalinear con Dashboard
   // Cargar accesorios desde API y dejar de usar localStorage
-  const API_BASE = ((import.meta as unknown as { env?: Record<string,string> }).env?.VITE_API_URL) || 'http://localhost:8081';
+  const API_BASE = ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL) || 'http://localhost:8081';
   useEffect(() => {
     const load = async () => {
       try {
@@ -114,7 +114,7 @@ export default function Objetivos() {
       } catch (e) { console.warn('No se pudo cargar accesorios de la API', e); }
     };
     load();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Detectar y traer datos de Mercado Libre por ID (MLA...)
@@ -169,14 +169,14 @@ export default function Objetivos() {
       if (!filled) {
         try {
           // Fallback sin CORS: leer HTML/plano de la página con Jina y extraer señales
-          const resp = await fetch(`https://r.jina.ai/http://${url.replace(/^https?:\/\//,'')}`);
+          const resp = await fetch(`https://r.jina.ai/http://${url.replace(/^https?:\/\//, '')}`);
           if (resp.ok) {
             const pageText = await resp.text();
             // Título: primera línea relevante
             const titleLine = (pageText.match(/^.*\S.*$/m) || [url])[0];
             // Precio: primera coincidencia $ 123.456,78
             const priceMatch = pageText.match(/\$\s*([0-9]{1,3}(?:[.,][0-9]{3})*(?:,[0-9]{2})?)/);
-            const price = priceMatch ? parseFloat(priceMatch[1].replace(/\./g,'').replace(/,/, '.')) : undefined;
+            const price = priceMatch ? parseFloat(priceMatch[1].replace(/\./g, '').replace(/,/, '.')) : undefined;
             // Imagen: intentamos capturar una URL de imagen común en el texto
             const imgMatch = pageText.match(/https?:[^\s]*\.(?:jpg|jpeg|png|webp)/i);
 
@@ -227,8 +227,35 @@ export default function Objetivos() {
       return typeof parsed?.additionalSavings === 'number' ? parsed.additionalSavings : 0;
     } catch { return 0; }
   }, []);
+
+  // Calcular gastos de la semana para mostrar dinero neto
+  const weeklyExpenses = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('mm_variable_expenses');
+      const fixedRaw = localStorage.getItem('mm_fixed_expenses');
+      if (!raw && !fixedRaw) return 0;
+
+      let total = 0;
+      if (raw) {
+        const expenses = JSON.parse(raw);
+        if (Array.isArray(expenses)) {
+          total += expenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
+        }
+      }
+      if (fixedRaw) {
+        const fixed = JSON.parse(fixedRaw);
+        if (Array.isArray(fixed)) {
+          total += fixed.filter(f => f.paid).reduce((sum, f) => sum + (f.amount || 0), 0);
+        }
+      }
+      return total;
+    } catch { return 0; }
+  }, []);
+
   const displayMotoCurrent = motoCurrent + additionalSavings;
+  const netMotoCurrent = displayMotoCurrent - weeklyExpenses;
   const displayProgress = useMemo(() => getProgressPercentage(displayMotoCurrent, MOTO_TARGET), [displayMotoCurrent]);
+  const netProgress = useMemo(() => getProgressPercentage(netMotoCurrent, MOTO_TARGET), [netMotoCurrent]);
 
   return (
     <div className="space-y-6">
@@ -269,6 +296,7 @@ export default function Objetivos() {
               <div>
                 <p className="text-sm text-muted-foreground">Moto - Ahorrado (incl. préstamo)</p>
                 <p className="text-2xl font-bold text-income">{formatCurrency(displayMotoCurrent)}</p>
+                <p className="text-xs text-muted-foreground">Neto: {formatCurrency(netMotoCurrent)} (después de gastos)</p>
               </div>
               <TrendingUp className="h-8 w-8 text-income" />
             </div>
@@ -298,10 +326,10 @@ export default function Objetivos() {
             <CardTitle>Agregar producto (link de Mercado Libre)</CardTitle>
           </CardHeader>
           <CardContent>
-            <form onSubmit={(e)=>{e.preventDefault(); addFromUrl();}} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <form onSubmit={(e) => { e.preventDefault(); addFromUrl(); }} className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="acc-url">Link (Mercado Libre)</Label>
-                <Input id="acc-url" placeholder="https://articulo.mercadolibre.com.ar/..." value={newUrl} onChange={(e)=>setNewUrl(e.target.value)} required />
+                <Input id="acc-url" placeholder="https://articulo.mercadolibre.com.ar/..." value={newUrl} onChange={(e) => setNewUrl(e.target.value)} required />
               </div>
               <div className="md:col-span-2 flex gap-2">
                 <Button type="submit" disabled={adding} className="bg-gradient-goal border-0 flex-1">{adding ? 'Agregando...' : 'Agregar'}</Button>
@@ -331,6 +359,9 @@ export default function Objetivos() {
                 <span className="text-muted-foreground">{formatCurrency(MOTO_TARGET)}</span>
               </div>
               <Progress value={displayProgress} className="h-3" />
+              <div className="text-xs text-muted-foreground">
+                Progreso neto: {netProgress.toFixed(1)}% ({formatCurrency(netMotoCurrent)})
+              </div>
             </div>
           </CardContent>
         </Card>
