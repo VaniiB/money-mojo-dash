@@ -76,7 +76,7 @@ const ENVIO_RATES = {
 };
 
 export default function Dashboard() {
-  const [weekData, setWeekData] = useState<DayData[]>(mockWeekData);
+  const [weekData, setWeekData] = useState<DayData[]>([]);
   const [financialData, setFinancialData] = useState(initialFinancialData);
   // Flags para evitar sobrescribir la DB al cargar por primera vez
   const [loaded, setLoaded] = useState<{ flex:boolean; known:boolean; week:boolean; financial:boolean; billing:boolean }>({ flex:false, known:false, week:false, financial:false, billing:false });
@@ -245,11 +245,20 @@ export default function Dashboard() {
     const endStr = end.toISOString().slice(0,10);
     const load = async () => {
       const fin = await apiGet<typeof initialFinancialData>(`/api/settings/financialData`);
-      if (fin && fin.motoGoal) { setFinancialData(fin); setLoaded(l => ({ ...l, financial: true })); }
+      if (fin && fin.motoGoal) {
+        setFinancialData(fin);
+      } else {
+        // si no hay registro en DB aún, usar defaults y permitir guardar
+        setFinancialData(prev => prev ?? initialFinancialData);
+      }
+      setLoaded(l => ({ ...l, financial: true }));
       const days = await apiGet<DayData[]>(`/api/week-data?start=${encodeURIComponent(startStr)}&end=${encodeURIComponent(endStr)}`);
       if (Array.isArray(days)) { setWeekData(days); setLoaded(l => ({ ...l, week: true })); }
       const wb = await apiGet<Record<string, { vanina?: number; leonardo?: number; registeredSum?: number; registeredAt?: string }>>(`/api/weekly-billing/${encodeURIComponent(startStr)}`);
-      if (wb) { setWeeklyBilling(prev => ({ ...prev, [startStr]: wb as any })); setLoaded(l => ({ ...l, billing: true })); }
+      if (wb) {
+        setWeeklyBilling(prev => ({ ...prev, [startStr]: wb as any }));
+      }
+      setLoaded(l => ({ ...l, billing: true }));
       const v = await apiGet<Array<{ date: string; amount: number }>>(`/api/expenses/variable`);
       if (Array.isArray(v)) setVarExpensesAll(v);
       const f = await apiGet<Array<{ date: string; amount: number; paid?: boolean }>>(`/api/expenses/fixed`);
